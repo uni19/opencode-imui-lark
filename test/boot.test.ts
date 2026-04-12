@@ -1,0 +1,1673 @@
+import { describe, expect, test } from "bun:test"
+import { body, guide, holdmsg, moremsg, on_conn, permit, pick, publish, recover, status_text } from "../src/app/boot.ts"
+import type { AppCfg, ConnState, FeishuApi, ImSession, InboundMessage, OpencodeSvc, RenderOut, Task } from "../src/contracts.ts"
+import { createTaskSvc } from "../src/gateway/task.ts"
+import { createRender } from "../src/render/text.ts"
+import { createMemoryStore } from "../src/storage/db.ts"
+
+function inbound(input?: Partial<InboundMessage>): InboundMessage {
+  return {
+    id: "in_1",
+    platform: "feishu",
+    kind: "message",
+    event_id: "evt_1",
+    tenant_id: "tenant",
+    chat_id: "chat",
+    user_id: "user",
+    raw: {},
+    created_at: 1,
+    text: "",
+    message_id: "msg_1",
+    assets: [],
+    mentions: [],
+    ...input,
+  }
+}
+
+function row(input?: Partial<Task>): Task {
+  return {
+    id: "tsk_1",
+    im_session_id: "ims_1",
+    session_id: "ses_1",
+    inbound_id: "in_1",
+    status: "running",
+    created_at: 1,
+    updated_at: 1,
+    ...input,
+  }
+}
+
+function session(input?: Partial<ImSession>): ImSession {
+  return {
+    id: "ims_1",
+    platform: "feishu",
+    tenant_id: "tenant",
+    chat_id: "chat",
+    user_id: "user",
+    session_id: "ses_1",
+    directory: "/tmp",
+    state: "active",
+    created_at: 1,
+    updated_at: 1,
+    ...input,
+  }
+}
+
+function cfg() {
+  return {
+    log: { level: "info" },
+    storage: { path: ":memory:" },
+    feishu: { mode: "off" },
+    opencode: {
+      base_url: "http://127.0.0.1:4096",
+      username: "opencode",
+      directory: "/tmp",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+      },
+    },
+  } satisfies AppCfg
+}
+
+function feishu(input?: { patch_err?: string }) {
+  const list: Array<{ kind: "send" | "reply" | "patch"; out: RenderOut }> = []
+  return {
+    api: {
+      async send(item) {
+        list.push({ kind: "send", out: item.out })
+        return { id: "out_send" }
+      },
+      async reply(item) {
+        list.push({ kind: "reply", out: item.out })
+        return { id: "out_reply" }
+      },
+      async patch(item) {
+        list.push({ kind: "patch", out: item.out })
+        if (input?.patch_err) throw new Error(input.patch_err)
+      },
+      async fetch() {
+        throw new Error("not used")
+      },
+      async sync() {},
+      names() {
+        return []
+      },
+    } satisfies FeishuApi,
+    list,
+  }
+}
+
+function opencode(input?: { status?: Record<string, unknown> | null; last?: string }) {
+  return {
+    async ensure() {
+      return { id: "ses_1" }
+    },
+    async session() {
+      return null
+    },
+    async sessions() {
+      return []
+    },
+    async status() {
+      if (input?.status === null) throw new Error("status failed")
+      return input?.status ?? {}
+    },
+    async commands() {
+      return []
+    },
+    async skills() {
+      return []
+    },
+    async agents() {
+      return []
+    },
+    async providers() {
+      return []
+    },
+    async mcps() {
+      return []
+    },
+    async prompt() {},
+    async abort() {},
+    async allow() {},
+    async answer() {},
+    async reject() {},
+    async command() {
+      return undefined
+    },
+    async last() {
+      return input?.last
+    },
+    async result() {
+      if (input?.last) return { state: "ok" as const, text: input.last }
+      return { state: "empty" as const }
+    },
+  } satisfies OpencodeSvc
+}
+
+describe("boot helpers", () => {
+  test("strips bot mentions from group body", () => {
+    expect(
+      body(
+        inbound({
+          chat_type: "group",
+          text: "@飞书 CLI   看看这个\n",
+          mention_names: ["飞书 CLI"],
+        }),
+      ),
+    ).toBe("看看这个")
+  })
+
+  test("permission only accepts explicit numeric choices", () => {
+    expect(permit("1")).toBe("once")
+    expect(permit("2")).toBe("always")
+    expect(permit("3")).toBe("reject")
+    expect(permit("继续")).toBeUndefined()
+    expect(permit("1,2")).toBeUndefined()
+  })
+
+  test("question picks numbered options", () => {
+    expect(pick("1,2", ["a", "b", "c"])).toEqual(["a", "b"])
+    expect(pick("2 2", ["a", "b", "c"])).toEqual(["b"])
+    expect(pick("继续", ["a", "b"])).toBeUndefined()
+  })
+
+  test("adds attachment guidance only when assets are present", () => {
+    expect(
+      guide("这是什么", [
+        {
+          kind: "image",
+          key: "img_1",
+        },
+      ]),
+    ).toContain("不要把内部工具调用、读取过程、本地缓存路径或系统注入文本当作最终答案的一部分。")
+    expect(
+      guide("这是什么", [
+        {
+          kind: "image",
+          key: "img_1",
+        },
+      ]),
+    ).toContain("附件概览：1 张图片")
+    expect(
+      guide("这是什么", [
+        {
+          kind: "image",
+          key: "img_1",
+        },
+      ]),
+    ).toContain("用户要求：这是什么")
+    expect(guide("普通问题", [])).toBe("普通问题")
+  })
+
+  test("includes attachment order for multi-asset prompts", () => {
+    const val = guide("分别说明这些附件", [
+      {
+        kind: "image",
+        key: "img_1",
+        name: "cover.png",
+      },
+      {
+        kind: "image",
+        key: "img_2",
+        name: "diagram.png",
+      },
+      {
+        kind: "file",
+        key: "file_1",
+        name: "report.pdf",
+      },
+    ])
+
+    expect(val).toContain("附件概览：2 张图片，1 个文件")
+    expect(val).toContain("1. 图片 cover.png")
+    expect(val).toContain("2. 图片 diagram.png")
+    expect(val).toContain("3. 文件 report.pdf")
+    expect(val).toContain("第 N 个附件")
+  })
+
+  test("formats waiting attachment hints with initial and accumulated counts", () => {
+    expect(
+      holdmsg([
+        {
+          kind: "image",
+          key: "img_1",
+        },
+        {
+          kind: "file",
+          key: "file_1",
+        },
+      ]),
+    ).toBe("已收到 1 张图片，1 个文件，请再发一句你希望我做什么。我会把这些附件和你的说明一起处理。")
+
+    expect(
+      moremsg(
+        [
+          {
+            kind: "image",
+            key: "img_2",
+          },
+        ],
+        [
+          {
+            kind: "image",
+            key: "img_1",
+          },
+          {
+            kind: "file",
+            key: "file_1",
+          },
+          {
+            kind: "image",
+            key: "img_2",
+          },
+        ],
+      ),
+    ).toBe("又收到 1 张图片，当前累计 2 张图片，1 个文件，请再发一句你希望我做什么。")
+  })
+
+  test("renders status report with connection and progress summary", () => {
+    const message = {
+      name: "message",
+      status: "reconnecting",
+      updated_at: 1,
+      attempt: 3,
+    } satisfies ConnState
+    const opencode = {
+      name: "opencode",
+      status: "reconnecting",
+      updated_at: 1,
+      err: "fetch failed",
+      attempt: 2,
+      wait_ms: 4000,
+    } satisfies ConnState
+
+    expect(
+      status_text({
+        row: row({
+          status: "waiting_question",
+          note: "question:0:%E8%AF%B7%E9%80%89%E6%8B%A9:A|B|C|D",
+          updated_at: 1710000000000,
+        }),
+        current: {
+          id: "ims_1",
+          platform: "feishu",
+          tenant_id: "tenant",
+          chat_id: "chat",
+          user_id: "user",
+          session_id: "ses_1",
+          directory: "/tmp/work",
+          workspace_id: "ws_1",
+          state: "active",
+          created_at: 1,
+          updated_at: 1,
+        },
+        pref: {
+          chat: {
+            scope: "chat",
+            tenant_id: "tenant",
+            chat_id: "chat",
+            directory: "/tmp/chat",
+          },
+          user: {
+            scope: "user",
+            tenant_id: "tenant",
+            user_id: "user",
+            directory: "/tmp/user",
+          },
+        },
+        conf: cfg(),
+        syncd: "unknown",
+        message,
+        opencode,
+      }),
+    ).toContain("会话状态：waiting_question（等待补充信息）")
+    expect(
+      status_text({
+        row: row({
+          status: "waiting_question",
+          note: "question:0:%E8%AF%B7%E9%80%89%E6%8B%A9:A|B|C|D",
+          updated_at: 1710000000000,
+        }),
+        current: {
+          id: "ims_1",
+          platform: "feishu",
+          tenant_id: "tenant",
+          chat_id: "chat",
+          user_id: "user",
+          session_id: "ses_1",
+          directory: "/tmp/work",
+          workspace_id: "ws_1",
+          state: "active",
+          created_at: 1,
+          updated_at: 1,
+        },
+        pref: {
+          chat: {
+            scope: "chat",
+            tenant_id: "tenant",
+            chat_id: "chat",
+            directory: "/tmp/chat",
+          },
+          user: {
+            scope: "user",
+            tenant_id: "tenant",
+            user_id: "user",
+            directory: "/tmp/user",
+          },
+        },
+        conf: cfg(),
+        syncd: "unknown",
+        message,
+        opencode,
+      }),
+    ).toContain("飞书连接：reconnecting #3")
+    expect(
+      status_text({
+        row: row({
+          status: "waiting_question",
+          note: "question:0:%E8%AF%B7%E9%80%89%E6%8B%A9:A|B|C|D",
+          updated_at: 1710000000000,
+        }),
+        current: {
+          id: "ims_1",
+          platform: "feishu",
+          tenant_id: "tenant",
+          chat_id: "chat",
+          user_id: "user",
+          session_id: "ses_1",
+          directory: "/tmp/work",
+          workspace_id: "ws_1",
+          state: "active",
+          created_at: 1,
+          updated_at: 1,
+        },
+        pref: {
+          chat: {
+            scope: "chat",
+            tenant_id: "tenant",
+            chat_id: "chat",
+            directory: "/tmp/chat",
+          },
+          user: {
+            scope: "user",
+            tenant_id: "tenant",
+            user_id: "user",
+            directory: "/tmp/user",
+          },
+        },
+        conf: cfg(),
+        syncd: "unknown",
+        message,
+        opencode,
+      }),
+    ).toContain("OpenCode 连接：reconnecting")
+    expect(
+      status_text({
+        row: row({
+          status: "waiting_question",
+          note: "question:0:%E8%AF%B7%E9%80%89%E6%8B%A9:A|B|C|D",
+          updated_at: 1710000000000,
+        }),
+        current: {
+          id: "ims_1",
+          platform: "feishu",
+          tenant_id: "tenant",
+          chat_id: "chat",
+          user_id: "user",
+          session_id: "ses_1",
+          directory: "/tmp/work",
+          workspace_id: "ws_1",
+          state: "active",
+          created_at: 1,
+          updated_at: 1,
+        },
+        pref: {
+          chat: {
+            scope: "chat",
+            tenant_id: "tenant",
+            chat_id: "chat",
+            directory: "/tmp/chat",
+          },
+          user: {
+            scope: "user",
+            tenant_id: "tenant",
+            user_id: "user",
+            directory: "/tmp/user",
+          },
+        },
+        conf: cfg(),
+        syncd: "unknown",
+        message,
+        opencode,
+      }),
+    ).toContain("OpenCode 连接：reconnecting #2 - 约 4 秒后重试 - 网络请求失败：无法连接到服务，请检查服务地址、网络、代理或 TLS 配置。")
+    expect(
+      status_text({
+        row: row({
+          status: "waiting_question",
+          note: "question:0:%E8%AF%B7%E9%80%89%E6%8B%A9:A|B|C|D",
+          updated_at: 1710000000000,
+        }),
+        current: {
+          id: "ims_1",
+          platform: "feishu",
+          tenant_id: "tenant",
+          chat_id: "chat",
+          user_id: "user",
+          session_id: "ses_1",
+          directory: "/tmp/work",
+          workspace_id: "ws_1",
+          state: "active",
+          created_at: 1,
+          updated_at: 1,
+        },
+        pref: {
+          chat: {
+            scope: "chat",
+            tenant_id: "tenant",
+            chat_id: "chat",
+            directory: "/tmp/chat",
+          },
+          user: {
+            scope: "user",
+            tenant_id: "tenant",
+            user_id: "user",
+            directory: "/tmp/user",
+          },
+        },
+        conf: cfg(),
+        syncd: "unknown",
+        message,
+        opencode,
+      }),
+    ).toContain("最近进展：等待补充信息：请选择 (1.A / 2.B / 3.C / ...)")
+    expect(
+      status_text({
+        row: row({
+          status: "running",
+          note: "开始处理: build / gpt-5.4",
+          updated_at: 1710000000000,
+        }),
+        current: {
+          id: "ims_1",
+          platform: "feishu",
+          tenant_id: "tenant",
+          chat_id: "chat",
+          user_id: "user",
+          session_id: "ses_1",
+          directory: "/tmp/work",
+          workspace_id: "ws_1",
+          state: "active",
+          created_at: 1,
+          updated_at: 1,
+        },
+        pref: {
+          chat: {
+            scope: "chat",
+            tenant_id: "tenant",
+            chat_id: "chat",
+            directory: "/tmp/chat",
+          },
+          user: {
+            scope: "user",
+            tenant_id: "tenant",
+            user_id: "user",
+            directory: "/tmp/user",
+          },
+        },
+        conf: cfg(),
+        message,
+        opencode,
+      }),
+    ).toContain("下一步：当前正在等待 OpenCode 连接恢复，可稍后重试 /status，或发送 /abort 终止。")
+  })
+
+  test("renders terminal note for completed status", () => {
+    expect(
+      status_text({
+        row: row({
+          status: "completed",
+          note: "最终总结内容",
+        }),
+        current: null,
+        pref: {
+          chat: null,
+          user: null,
+        },
+        conf: cfg(),
+      }),
+    ).toContain("最近进展：最终总结内容")
+  })
+
+  test("message reconnect resumes waiting attachment prompt", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_attachment",
+        note: "等待补充说明",
+      }),
+    )
+    await store.save_pending({
+      session_id: "ses_1",
+      inbound_id: "in_1",
+      assets: [
+        {
+          kind: "image",
+          key: "img_1",
+          name: "a.png",
+          mime: "image/png",
+          url: "file:///tmp/a.png",
+        },
+      ],
+      created_at: 1,
+      updated_at: 1,
+    })
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 1,
+      },
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    expect(ui.list.at(-1)?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "blue",
+        text: "飞书消息连接已恢复，仍在等待你的补充说明。",
+      },
+    })
+  })
+
+  test("message reconnect restores waiting permission only when remote is still busy", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_permission",
+        req: "req_1",
+        note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent('{"filepath":"/tmp"}')}`,
+      }),
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 1,
+      },
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    expect((await store.get_task("tsk_1"))?.status).toBe("waiting_permission")
+    expect(ui.list.at(-1)?.out).toMatchObject({
+      kind: "card",
+      body: {
+        type: "approval",
+        req: "req_1",
+        tool: "external_directory",
+      },
+    })
+  })
+
+  test("message reconnect fails stale waiting question when remote is already idle", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_question",
+        req: "req_1",
+        note: `question:1:${encodeURIComponent("请选择")}:${encodeURIComponent("A")}|${encodeURIComponent("B")}`,
+      }),
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {},
+      }),
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 1,
+      },
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    expect((await store.get_task("tsk_1"))?.status).toBe("failed")
+    expect(ui.list.at(-1)?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "red",
+        text: "出错了：飞书消息连接恢复后，之前的补充问题已失效，请重新发送上一条消息。",
+      },
+    })
+  })
+
+  test("message reconnect keeps waiting permission pending when remote status is unknown", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_permission",
+        req: "req_1",
+        note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent('{"filepath":"/tmp"}')}`,
+      }),
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: null,
+      }),
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 1,
+      },
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    expect((await store.get_task("tsk_1"))?.status).toBe("waiting_permission")
+    expect(ui.list.at(-1)?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "blue",
+        text: "飞书消息连接已恢复，正在继续同步执行状态…",
+      },
+    })
+  })
+
+  test("message reconnect promotes queued task when remote is still busy", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "queued",
+      }),
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 1,
+        attempt: 1,
+      },
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    expect((await store.get_task("tsk_1"))?.status).toBe("running")
+    expect(ui.list.at(-1)?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "blue",
+        text: "飞书消息连接已恢复，正在继续同步执行状态…",
+      },
+    })
+  })
+
+  test("message reconnect finishes running task when remote is already idle with output", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(row())
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {},
+        last: "resume done",
+      }),
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 1,
+        attempt: 1,
+      },
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    expect((await store.get_task("tsk_1"))?.status).toBe("completed")
+    expect(ui.list.at(-1)?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "green",
+        text: "resume done",
+      },
+    })
+  })
+
+  test("message reconnect keeps running task alive when remote status is unknown", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(row())
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: null,
+      }),
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 1,
+        attempt: 1,
+      },
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    expect((await store.get_task("tsk_1"))?.status).toBe("running")
+    expect(ui.list.at(-1)?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "blue",
+        text: "飞书消息连接已恢复，正在继续同步执行状态…",
+      },
+    })
+  })
+
+  test("opencode reconnect runs recover path", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(row())
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      {
+        name: "opencode",
+        status: "error",
+        updated_at: 1,
+        err: "boom",
+      },
+      {
+        name: "opencode",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    expect(ui.list.at(-1)?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "blue",
+        text: "OpenCode 连接已恢复，正在继续同步执行状态…",
+      },
+    })
+  })
+
+  test("opencode first ready after connecting also runs recover path", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(row())
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      {
+        name: "opencode",
+        status: "connecting",
+        updated_at: 1,
+      },
+      {
+        name: "opencode",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    expect(ui.list.at(-1)?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "blue",
+        text: "OpenCode 连接已恢复，正在继续同步执行状态…",
+      },
+    })
+  })
+
+  test("boot sync hint is patched forward when opencode becomes ready", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(row())
+
+    await recover(cfg(), store, svc, ui.api, createRender(), opencode({ status: null }), "boot")
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      {
+        name: "opencode",
+        status: "connecting",
+        updated_at: 1,
+      },
+      {
+        name: "opencode",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    expect(ui.list).toHaveLength(2)
+    expect(ui.list[0]).toMatchObject({
+      kind: "reply",
+      out: {
+        kind: "card",
+        body: {
+          template: "blue",
+          text: "OpenCode 正在建立连接，稍后会继续同步执行状态…",
+        },
+      },
+    })
+    expect(ui.list[1]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          template: "blue",
+          text: "OpenCode 连接已恢复，正在继续同步执行状态…",
+        },
+      },
+    })
+  })
+
+  test("connection burst only signals reconnecting once for active task", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "running",
+        updated_at: 1,
+      }),
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "opencode",
+        status: "ready",
+        updated_at: 1,
+      },
+      {
+        name: "opencode",
+        status: "error",
+        updated_at: 2,
+        err: "fetch failed",
+        attempt: 1,
+        wait_ms: 1000,
+      },
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "opencode",
+        status: "error",
+        updated_at: 2,
+        err: "fetch failed",
+        attempt: 1,
+        wait_ms: 1000,
+      },
+      {
+        name: "opencode",
+        status: "reconnecting",
+        updated_at: 3,
+        err: "fetch failed",
+        attempt: 1,
+        wait_ms: 1000,
+      },
+    )
+
+    expect(ui.list).toHaveLength(1)
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "blue",
+        text: "与 OpenCode 的连接暂时中断，正在重连…（第 1 次，约 1 秒后重试） 原因：网络请求失败：无法连接到服务，请检查服务地址、网络、代理或 TLS 配置。",
+      },
+    })
+  })
+
+  test("repeated reconnecting states do not spam active task", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "running",
+        updated_at: 1,
+      }),
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "opencode",
+        status: "ready",
+        updated_at: 1,
+      },
+      {
+        name: "opencode",
+        status: "reconnecting",
+        updated_at: 2,
+        err: "fetch failed",
+        attempt: 1,
+        wait_ms: 1000,
+      },
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "opencode",
+        status: "reconnecting",
+        updated_at: 2,
+        err: "fetch failed",
+        attempt: 1,
+        wait_ms: 1000,
+      },
+      {
+        name: "opencode",
+        status: "reconnecting",
+        updated_at: 3,
+      },
+    )
+
+    expect(ui.list).toHaveLength(1)
+  })
+
+  test("reconnecting reason change updates active task immediately", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "running",
+        updated_at: Date.now(),
+      }),
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "opencode",
+        status: "ready",
+        updated_at: 1,
+      },
+      {
+        name: "opencode",
+        status: "reconnecting",
+        updated_at: 2,
+        err: "fetch failed",
+        attempt: 1,
+        wait_ms: 1000,
+      },
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "opencode",
+        status: "reconnecting",
+        updated_at: 2,
+        err: "fetch failed",
+        attempt: 1,
+        wait_ms: 1000,
+      },
+      {
+        name: "opencode",
+        status: "reconnecting",
+        updated_at: 3,
+        err: "unknown certificate verification error",
+        attempt: 2,
+        wait_ms: 2000,
+      },
+    )
+
+    expect(ui.list).toHaveLength(2)
+    expect(ui.list.at(-1)).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          template: "blue",
+          text: "与 OpenCode 的连接暂时中断，正在重连…（第 2 次，约 2 秒后重试） 原因：网络请求失败：证书校验失败，请检查代理、HTTPS 证书或企业网关配置。",
+        },
+      },
+    })
+  })
+
+  test("new reconnect cycle after recovery is not hidden by cooldown", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "running",
+        updated_at: Date.now(),
+      }),
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "opencode",
+        status: "ready",
+        updated_at: 1,
+      },
+      {
+        name: "opencode",
+        status: "reconnecting",
+        updated_at: 2,
+        err: "fetch failed",
+        attempt: 1,
+        wait_ms: 1000,
+      },
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      {
+        name: "opencode",
+        status: "reconnecting",
+        updated_at: 2,
+        err: "fetch failed",
+        attempt: 1,
+        wait_ms: 1000,
+      },
+      {
+        name: "opencode",
+        status: "ready",
+        updated_at: 3,
+      },
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "opencode",
+        status: "ready",
+        updated_at: 3,
+      },
+      {
+        name: "opencode",
+        status: "reconnecting",
+        updated_at: 4,
+        err: "fetch failed",
+        attempt: 2,
+        wait_ms: 2000,
+      },
+    )
+
+    expect(ui.list.at(-1)).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          template: "blue",
+          text: "与 OpenCode 的连接暂时中断，正在重连…（第 2 次，约 2 秒后重试） 原因：网络请求失败：无法连接到服务，请检查服务地址、网络、代理或 TLS 配置。",
+        },
+      },
+    })
+  })
+
+  test("message connection burst only signals reconnecting once for active task", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "running",
+        updated_at: 1,
+      }),
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 1,
+      },
+      {
+        name: "message",
+        status: "error",
+        updated_at: 2,
+        err: "ws closed",
+        attempt: 1,
+      },
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "message",
+        status: "error",
+        updated_at: 2,
+        err: "ws closed",
+        attempt: 1,
+      },
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 3,
+        err: "ws closed",
+        attempt: 1,
+      },
+    )
+
+    expect(ui.list).toHaveLength(1)
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "blue",
+        text: "飞书消息连接暂时中断，正在重连…（第 1 次） 原因：ws closed",
+      },
+    })
+  })
+
+  test("message reconnecting reason change updates active task immediately", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "running",
+        updated_at: Date.now(),
+      }),
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 1,
+      },
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 2,
+        err: "ws closed",
+        attempt: 1,
+      },
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 2,
+        err: "ws closed",
+        attempt: 1,
+      },
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 3,
+        err: "network jitter",
+        attempt: 2,
+      },
+    )
+
+    expect(ui.list).toHaveLength(2)
+    expect(ui.list.at(-1)).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          template: "blue",
+          text: "飞书消息连接暂时中断，正在重连…（第 2 次） 原因：网络请求失败：无法连接到服务，请检查服务地址、网络、代理或 TLS 配置。",
+        },
+      },
+    })
+  })
+
+  test("new message reconnect cycle after recovery is not hidden by cooldown", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "running",
+        updated_at: Date.now(),
+      }),
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 1,
+      },
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 2,
+        err: "ws closed",
+        attempt: 1,
+      },
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 2,
+        err: "ws closed",
+        attempt: 1,
+      },
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 3,
+      },
+    )
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 3,
+      },
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 4,
+        err: "network jitter",
+        attempt: 2,
+      },
+    )
+
+    expect(ui.list.at(-1)).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          template: "blue",
+          text: "飞书消息连接暂时中断，正在重连…（第 2 次） 原因：网络请求失败：无法连接到服务，请检查服务地址、网络、代理或 TLS 配置。",
+        },
+      },
+    })
+  })
+})
+
+describe("publish", () => {
+  test("dedups identical payload instead of patching again", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        outbound_id: "out_old",
+      }),
+    )
+    await store.save_outbound({
+      task_id: "tsk_1",
+      msg_id: "out_old",
+      kind: "card",
+      payload: {
+        title: "OpenCode",
+        template: "blue",
+        step: "步骤 1",
+        text: "处理中…",
+      },
+      created_at: 1,
+      updated_at: 1,
+    })
+
+    await publish(
+      store,
+      task,
+      ui.api,
+      "ses_1",
+      "chat",
+      {
+        kind: "card",
+        body: {
+          title: "OpenCode",
+          template: "blue",
+          step: "步骤 1",
+          text: "处理中…",
+        },
+      },
+      { dedup: true },
+    )
+
+    expect(ui.list).toEqual([])
+  })
+
+  test("does not dedup when only step changes", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        outbound_id: "out_old",
+        note: "处理中…",
+      }),
+    )
+    await store.save_outbound({
+      task_id: "tsk_1",
+      msg_id: "out_old",
+      kind: "card",
+      payload: {
+        title: "OpenCode",
+        template: "blue",
+        step: "步骤 1",
+        text: "处理中…",
+      },
+      created_at: 1,
+      updated_at: 1,
+    })
+
+    await publish(
+      store,
+      task,
+      ui.api,
+      "ses_1",
+      "chat",
+      {
+        kind: "card",
+        body: {
+          title: "OpenCode",
+          template: "blue",
+          step: "步骤 2",
+          text: "处理中…",
+        },
+      },
+      { dedup: true },
+    )
+
+    expect(ui.list).toEqual([
+      {
+        kind: "patch",
+        out: {
+          kind: "card",
+          body: {
+            title: "OpenCode",
+            template: "blue",
+            step: "步骤 2",
+            text: "处理中…",
+          },
+        },
+      },
+    ])
+  })
+
+  test("falls back to reply when patch fails", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu({ patch_err: "patch failed" })
+    const warn = console.warn
+    console.warn = () => undefined
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        outbound_id: "out_old",
+      }),
+    )
+
+    try {
+      await publish(
+        store,
+        task,
+        ui.api,
+        "ses_1",
+        "chat",
+        {
+          kind: "card",
+          body: {
+            title: "OpenCode",
+            template: "green",
+            text: "done",
+          },
+        },
+      )
+    } finally {
+      console.warn = warn
+    }
+
+    expect(ui.list.map((item) => item.kind)).toEqual(["patch", "reply"])
+    expect((await store.get_task("tsk_1"))?.outbound_id).toBe("out_reply")
+    expect(await store.get_outbound("tsk_1")).toMatchObject({
+      msg_id: "out_reply",
+    })
+  })
+})

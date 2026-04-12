@@ -1,0 +1,18 @@
+{
+  "name": "opencode-feishu-imui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/app/main.ts",
+    "start": "bun src/app/main.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.36.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.1",
+    "typescript": "^5.9.3"
+  }
+}
