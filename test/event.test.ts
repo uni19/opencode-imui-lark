@@ -517,6 +517,63 @@ describe("on_event", () => {
     expect(ui.list).toEqual([])
   })
 
+  test("ignores late idle event after task is already completed", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ses = session("ses_6_idle")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_6_idle"))
+    await store.save_task(row("tsk_6_idle", ses.session_id, "in_6_idle", "completed"))
+
+    await on_event(store, task, ui.api, render, opencode("late done"), {
+      type: "session.status",
+      properties: {
+        sessionID: ses.session_id,
+        status: {
+          type: "idle",
+        },
+      },
+    } satisfies OpencodeEvent)
+
+    expect((await store.get_task("tsk_6_idle"))?.status).toBe("completed")
+    expect(ui.list).toEqual([])
+  })
+
+  test("dedups repeated session error with same payload", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ses = session("ses_dup_err")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_dup_err"))
+    await store.save_task(row("tsk_dup_err", ses.session_id, "in_dup_err", "running"))
+
+    const event = {
+      type: "session.error",
+      properties: {
+        sessionID: ses.session_id,
+        error: {
+          name: "BrokenPipe",
+        },
+      },
+    } satisfies OpencodeEvent
+
+    await on_event(store, task, ui.api, render, opencode(), event)
+    await on_event(store, task, ui.api, render, opencode(), event)
+
+    expect((await store.get_task("tsk_dup_err"))?.status).toBe("failed")
+    expect(ui.list).toHaveLength(1)
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "red",
+      },
+    })
+  })
+
   test("finishes task from inbound fallback when session mapping is gone", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)

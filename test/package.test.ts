@@ -1,0 +1,77 @@
+import { describe, expect, test } from "bun:test"
+import {
+  archiveBase,
+  currentTarget,
+  parseArgs,
+  renderInstalledEnvExample,
+  renderInstallScript,
+  renderPackageReadme,
+  renderServiceHelperScript,
+  renderServiceReadme,
+  renderUninstallScript,
+} from "../src/release/package.ts"
+
+describe("release package", () => {
+  test("maps host platform to supported bun target", () => {
+    expect(currentTarget("darwin", "arm64")).toBe("bun-darwin-arm64")
+    expect(currentTarget("linux", "x64")).toBe("bun-linux-x64")
+  })
+
+  test("parses release build args", () => {
+    expect(parseArgs(["node", "app"])).toEqual({
+      outdir: "dist/release",
+      targets: [currentTarget()],
+    })
+
+    expect(parseArgs(["node", "app", "--target=bun-linux-x64", "--outdir", "tmp/release"])).toEqual({
+      outdir: "tmp/release",
+      targets: ["bun-linux-x64"],
+    })
+  })
+
+  test("renders installed env template with data placeholder", () => {
+    const out = renderInstalledEnvExample(["LOG_LEVEL=info", "IMUI_DB_PATH=.data/imui.db", "IMUI_DATA_DIR=", "FEISHU_MODE=stdin", ""].join("\n"))
+
+    expect(out).toContain("IMUI_DB_PATH=__DATA_DIR__/imui.db")
+    expect(out).toContain("IMUI_DATA_DIR=__DATA_DIR__")
+    expect(out).toContain("Installed config template")
+  })
+
+  test("renders install and uninstall scripts with fixed config path semantics", () => {
+    const install = renderInstallScript("0.1.0")
+    const uninstall = renderUninstallScript()
+
+    expect(install).toContain('cp "$ROOT/share/README-service.md" "$SHARE_DIR/README-service.md"')
+    expect(install).toContain('cat > "$LIB_DIR/install.env" <<EOF')
+    expect(install).toContain('if [ -f "$INSTALL_ENV" ]; then')
+    expect(install).toContain('exec "$LIB_DIR/$APP" --env-file "$CONFIG_DIR/.env" "$@"')
+    expect(install).toContain('exec "$LIB_DIR/service-helper.sh" "$@"')
+    expect(install).toContain('sed "s#__DATA_DIR__#$DATA_DIR#g"')
+    expect(uninstall).toContain('rm -f "$BIN_DIR/$APP-service"')
+    expect(uninstall).toContain('rm -f "$LIB_DIR/install.env"')
+    expect(uninstall).toContain('Config and data are kept by default:')
+  })
+
+  test("renders package readme and archive name", () => {
+    expect(archiveBase("0.1.0", "bun-darwin-arm64")).toBe("opencode-feishu-imui-0.1.0-bun-darwin-arm64")
+    const readme = renderPackageReadme("0.1.0", "bun-darwin-arm64")
+    expect(readme).toContain("./install.sh")
+    expect(readme).toContain("FEISHU_MODE=long_conn")
+    expect(readme).toContain("opencode-feishu-imui")
+    expect(readme).toContain("opencode serve --hostname 127.0.0.1 --port 4096")
+    expect(readme).toContain("opencode-feishu-imui-service install")
+  })
+
+  test("renders service helper assets", () => {
+    const readme = renderServiceReadme()
+    const helper = renderServiceHelperScript()
+
+    expect(readme).toContain("launchd")
+    expect(readme).toContain("systemd --user")
+    expect(helper).toContain('INSTALL_ENV="$LIB_DIR/install.env"')
+    expect(helper).toContain('launchd_file="$HOME/Library/LaunchAgents/com.$APP.plist"')
+    expect(helper).toContain('systemd_file="$systemd_dir/$APP.service"')
+    expect(helper).toContain('systemctl --user enable --now "$APP.service"')
+    expect(helper).toContain('echo "usage: $APP-service <install|uninstall> [launchd|systemd]" >&2')
+  })
+})

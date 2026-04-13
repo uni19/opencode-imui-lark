@@ -1,5 +1,14 @@
 import type { AppCfg, OpencodeModel } from "../contracts.js"
 import path from "node:path"
+import { configDir, dataDir } from "./env.js"
+
+function base() {
+  return configDir()
+}
+
+function data() {
+  return dataDir()
+}
 
 function level() {
   const val = process.env.LOG_LEVEL
@@ -25,10 +34,26 @@ function model(): OpencodeModel | undefined {
 
 function dir(val?: string) {
   if (!val) return
-  return path.resolve(val)
+  return path.resolve(base(), val)
+}
+
+function runtimeDir(val: string | undefined, root: string, fallback: string) {
+  if (!val) return fallback
+  return path.resolve(root, val)
+}
+
+function num(val: string | undefined, fallback: number) {
+  if (!val?.trim()) return fallback
+  const parsed = Number(val)
+  return Number.isFinite(parsed) ? parsed : fallback
 }
 
 export function cfg(): AppCfg {
+  const config_dir = base()
+  const data_dir = data()
+  const asset_dir = runtimeDir(process.env.IMUI_ASSET_CACHE_DIR, data_dir, path.join(data_dir, "asset"))
+  const backup_dir = runtimeDir(process.env.IMUI_BACKUP_DIR, data_dir, path.join(data_dir, "backup"))
+
   return {
     log: {
       level: level(),
@@ -37,7 +62,16 @@ export function cfg(): AppCfg {
       path:
         process.env.IMUI_DB_PATH === ":memory:"
           ? ":memory:"
-          : path.resolve(process.cwd(), process.env.IMUI_DB_PATH ?? ".data/imui.db"),
+          : path.resolve(config_dir, process.env.IMUI_DB_PATH ?? ".data/imui.db"),
+    },
+    runtime: {
+      config_dir,
+      data_dir,
+      asset_dir,
+      asset_ttl_hours: num(process.env.IMUI_ASSET_TTL_HOURS, 7 * 24),
+      asset_max_mb: num(process.env.IMUI_ASSET_MAX_MB, 1024),
+      backup_dir,
+      backup_retention_days: num(process.env.IMUI_BACKUP_RETENTION_DAYS, 14),
     },
     feishu: {
       mode: mode(),

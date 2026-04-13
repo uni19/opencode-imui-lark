@@ -30,23 +30,29 @@
 - [ ] `.env.example` 与当前配置项一致
 - [ ] 未把本地调试路径、临时账号、个人 token 写进代码或文档
 - [ ] `.gitignore` 已覆盖 `.data/`、日志、缓存等本地运行数据
+- [ ] 工作树里若已存在 `.env`、`.data/` 等本地文件，已确认它们未被纳入暂存区或待提交内容
 
 ### 运行依赖
 
 - [ ] `bun install` 可完成
-- [ ] `FEISHU_MODE`
-- [ ] `FEISHU_APP_ID`
-- [ ] `FEISHU_APP_SECRET`
-- [ ] `OPENCODE_BASE_URL`
-- [ ] `OPENCODE_PASSWORD`
-- [ ] `OPENCODE_DIRECTORY`
+- [ ] `FEISHU_MODE` 已按目标环境设置为 `stdin` 或 `long_conn`
+- [ ] 若使用真实飞书：`FEISHU_APP_ID` 已配置
+- [ ] 若使用真实飞书：`FEISHU_APP_SECRET` 已配置
+- [ ] `OPENCODE_BASE_URL` 已指向可访问的 OpenCode Server
+- [ ] `OPENCODE_PASSWORD` 已配置且和服务端一致
+- [ ] `OPENCODE_DIRECTORY` 已配置且目录真实存在
+- [ ] 若要验证 workspace：`OPENCODE_WORKSPACE` 已配置或已准备可用 workspace 名称
+- [ ] `IMUI_DB_PATH` 所在目录可写
+- [ ] `IMUI_ASSET_TTL_HOURS`、`IMUI_ASSET_MAX_MB`、`IMUI_BACKUP_RETENTION_DAYS` 已按目标环境确认
+- [ ] 已先执行 `bun run release:doctor`，且输出中没有 `errors`
 
 ### 飞书控制台
 
 - [ ] 已启用机器人能力
 - [ ] 已订阅 `im.message.receive_v1`
 - [ ] 事件订阅方式为“使用长连接接收事件”
-- [ ] 所需 scope 已补齐
+- [ ] 所需 scope 已补齐，并已按 [docs/13-feishu-scope-minimum.md](13-feishu-scope-minimum.md) 做最小化确认
+- [ ] 机器人已被加入用于联调的群聊
 
 ## 2. 自动化验证
 
@@ -55,14 +61,43 @@
 ```bash
 bun test
 bun run typecheck
+bun run release:doctor
+bun run release:check
+bun run db:migrate
+bun run db:backup
+bun run release:build
 ```
 
 ### 自动化门禁
 
 - [ ] `bun test` 全绿
 - [ ] `bun run typecheck` 全绿
+- [ ] `bun run release:doctor` 全绿
+- [ ] `bun run release:check` 全绿
+- [ ] `bun run db:migrate` 可执行
+- [ ] `bun run db:backup` 可执行
+- [ ] `bun run release:build` 可产出目标安装包
 - [ ] 没有新增跳过测试
 - [ ] 没有删除已有恢复/事件/队列相关测试却缺少补充说明
+- [ ] 本次变更影响到的 Task Pack 结果已回写 `docs/06-delivery-plan.md`
+
+### 安装包门禁
+
+- [ ] `dist/release/` 中已生成目标平台的 `.tar.gz`
+- [ ] 安装包中包含真实二进制、`install.sh`、`uninstall.sh`、包内 README、服务说明、`.env` 模板
+- [ ] 安装脚本能在临时 `PREFIX` 下完成安装
+- [ ] 安装后的 `opencode-feishu-imui --help` 可执行
+- [ ] 安装后的 `opencode-feishu-imui-service install` / `uninstall` 可执行
+- [ ] 安装后会生成默认配置文件 `~/.config/opencode-feishu-imui/.env` 或目标 `CONFIG_DIR/.env`
+- [ ] 安装后能用安装态配置再跑一遍 `release:doctor`
+
+### 数据与运维门禁
+
+- [ ] 已确认附件缓存目录和备份目录落在预期位置
+- [ ] 已确认缓存 TTL / 容量上限符合目标环境
+- [ ] 已至少生成一份 SQLite 备份
+- [ ] 已确认数据库迁移命令可正常执行
+- [ ] 已确认当前版本支持读取目标 SQLite schema version
 
 ## 3. 飞书手工回归清单
 
@@ -106,8 +141,10 @@ bun run typecheck
 - [ ] 单图 + 文本
 - [ ] 多图 + 文本
 - [ ] 文件 + 文本
+- [ ] 文件 + 图片 + 说明
 - [ ] 图文混排 `post`
 - [ ] 附件-only 输入会进入等待说明
+- [ ] 附件-only 状态下连续补多次附件不会丢失前面的附件
 - [ ] 附件-only 后再补一条文本能继续执行
 - [ ] 回复里不暴露内部工具过程、缓存路径、summary 文本
 
@@ -128,6 +165,8 @@ bun run typecheck
 - [ ] 没有提交截图、临时文件、个人测试数据
 - [ ] 没有残留 `console.log` 式噪音输出
 - [ ] 没有未使用的大块试验代码
+- [ ] `.data/`、日志、缓存目录没有被纳入提交内容
+- [ ] 没有把个人 scope 配置截图、个人应用配置导出物提交进仓库
 
 ### 文档内容
 
@@ -148,6 +187,8 @@ bun run typecheck
 - `/status` 或 `/abort` 不可用
 - 长耗时任务容易长期卡住
 - 连接恢复后状态明显错乱
+- `release:doctor` 有错误但仍强行启动
+- SQLite 备份 / 迁移链路不可用
 
 ## 6. 问题归因速查
 
@@ -164,6 +205,7 @@ bun run typecheck
 - `src/feishu/conn.ts`
 - `src/feishu/api.ts`
 - `src/feishu/map.ts`
+- `docs/13-feishu-scope-minimum.md`
 
 ### 看起来像 OpenCode 问题
 
@@ -178,6 +220,7 @@ bun run typecheck
 - `src/opencode/client.ts`
 - `src/opencode/event.ts`
 - `src/app/boot.ts`
+- `src/app/validate.ts`
 
 ### 看起来像恢复 / 状态机问题
 
@@ -194,6 +237,7 @@ bun run typecheck
 - `test/watch.test.ts`
 - `test/probe.test.ts`
 - `test/boot.test.ts`
+- `docs/12-operations-and-maintenance.md`
 
 ## 7. 每次发布后的记录模板
 

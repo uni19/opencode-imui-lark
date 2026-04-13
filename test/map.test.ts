@@ -88,4 +88,50 @@ describe("parseMessage", () => {
       { kind: "file", key: "file_a", name: "note.txt" },
     ])
   })
+
+  test("parses mixed post with multiple images, file, and plain text lines", () => {
+    const msg = parseMessage({
+      event_id: "evt_2",
+      tenant_key: "tenant",
+      message: {
+        chat_id: "chat_3",
+        message_id: "msg_3",
+        chat_type: "p2p",
+        thread_id: "thr_1",
+        message_type: "post",
+        content: JSON.stringify({
+          zh_cn: {
+            title: "需求说明",
+            content: [
+              [
+                { tag: "text", text: "先看这两张图" },
+                { tag: "img", image_key: "img_1" },
+                { tag: "img", image_key: "img_2" },
+              ],
+              [
+                { tag: "text", text: "再参考附件" },
+                { tag: "file", file_key: "file_1", file_name: "spec.pdf" },
+              ],
+            ],
+          },
+        }),
+      },
+      sender: {
+        sender_id: {
+          open_id: "ou_user",
+        },
+      },
+    })
+
+    expect(msg).toMatchObject({
+      chat_id: "chat_3",
+      thread_id: "thr_1",
+      text: "需求说明\n先看这两张图\n再参考附件",
+    })
+    expect(msg?.assets).toEqual([
+      { kind: "image", key: "img_1", name: "image-img_1.png" },
+      { kind: "image", key: "img_2", name: "image-img_2.png" },
+      { kind: "file", key: "file_1", name: "spec.pdf" },
+    ])
+  })
 })

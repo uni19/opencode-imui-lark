@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { explain, friendly, signal, status_text } from "../src/app/boot.ts"
+import { stuck } from "../src/app/text.ts"
 import type { AppCfg, ConnState, FeishuApi, ImSession, InboundMessage, RenderOut, Task } from "../src/contracts.ts"
 import { createTaskSvc } from "../src/gateway/task.ts"
 import { createRender } from "../src/render/text.ts"
@@ -125,6 +126,18 @@ describe("error helpers", () => {
     expect(friendly("fetch failed")).toBe(
       "网络请求失败：无法连接到服务，请检查服务地址、网络、代理或 TLS 配置。",
     )
+    expect(friendly("invalid_api_key")).toBe(
+      "认证失败：请检查 OpenCode 或飞书的账号、密码和权限配置。",
+    )
+    expect(friendly("model_not_found")).toBe(
+      "模型不可用：请检查当前 provider/model 配置，或切换到可用模型。",
+    )
+    expect(friendly("ETIMEDOUT while connecting to provider")).toBe(
+      "请求超时：服务长时间没有响应，请稍后重试。",
+    )
+    expect(friendly("feishu api failed: 400 card content invalid")).toBe(
+      "飞书接口请求失败：请求格式、卡片内容或目标消息状态不符合当前接口要求。",
+    )
     expect(friendly("plain raw error")).toBe("plain raw error")
   })
 
@@ -137,6 +150,27 @@ describe("error helpers", () => {
     )
     expect(explain("opencode request failed: 400 Bad Request - session state invalid")).toContain(
       "建议：当前会话状态或请求参数可能异常，可先发送 /abort，再重试或重发上一条消息。",
+    )
+    expect(explain("ETIMEDOUT while connecting to provider")).toContain(
+      "建议：可稍后重试当前请求，一般不需要重发上一条消息。",
+    )
+    expect(explain("model_not_found")).toContain(
+      "建议：请先检查模型、凭证、配额或服务配置，修复后再重试。",
+    )
+    expect(explain("feishu api failed: 400 card content invalid")).toContain(
+      "建议：请稍后重试；若持续失败，请检查卡片内容或目标消息是否仍可更新。",
+    )
+  })
+
+  test("grades stuck guidance by task stage", () => {
+    expect(stuck("queued")).toBe(
+      "请求还在处理中，如长时间无变化可发送 /status 查看状态，或用 /abort 终止。",
+    )
+    expect(stuck("acked")).toBe(
+      "请求还在处理中，如长时间无变化可发送 /status 查看状态，或用 /abort 终止。",
+    )
+    expect(stuck("running")).toBe(
+      "还在处理中，如长时间无变化可发送 /status 查看状态，或用 /abort 终止。",
     )
   })
 

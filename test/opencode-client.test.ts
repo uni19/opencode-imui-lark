@@ -378,4 +378,94 @@ describe("opencode client", () => {
       state: "filtered",
     })
   })
+
+  test("result reports filtered when only unfinished internal draft text exists", async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify([
+          {
+            info: {
+              role: "assistant",
+            },
+            parts: [
+              {
+                type: "text",
+                text: "Reading /tmp/cache/image.png to inspect the attachment",
+                time: {
+                  end: 1,
+                },
+                synthetic: true,
+              },
+            ],
+          },
+        ]),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      )) as typeof fetch0
+
+    const svc = createOpencodeSvc(cfg())
+    expect(
+      await svc.result?.({
+        session_id: "ses_1",
+      }),
+    ).toEqual({
+      state: "filtered",
+    })
+  })
+
+  test("last prefers completed user-facing text over newer partial assistant draft", async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify([
+          {
+            info: {
+              role: "assistant",
+              time: {
+                completed: 1,
+              },
+            },
+            parts: [
+              {
+                type: "text",
+                text: "最终给用户的结论",
+                time: {
+                  end: 1,
+                },
+              },
+            ],
+          },
+          {
+            info: {
+              role: "assistant",
+            },
+            parts: [
+              {
+                type: "text",
+                text: "我先继续读取 /tmp/cache/file.pdf 再整理一下",
+                time: {
+                  end: 2,
+                },
+              },
+            ],
+          },
+        ]),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      )) as typeof fetch0
+
+    const svc = createOpencodeSvc(cfg())
+    expect(
+      await svc.last({
+        session_id: "ses_1",
+      }),
+    ).toBe("最终给用户的结论")
+  })
 })

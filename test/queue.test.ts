@@ -76,4 +76,29 @@ describe("queue", () => {
 
     expect(count).toBe(2)
   })
+
+  test("does not replay completed jobs on start", async () => {
+    const store = createMemoryStore()
+    const seen: string[] = []
+
+    await store.save_job({
+      id: "in_4",
+      status: "done",
+      created_at: 1,
+      updated_at: 1,
+    })
+
+    const queue = createQueue(store, async (job) => {
+      seen.push(job.id)
+    })
+
+    await queue.start()
+    await Bun.sleep(50)
+    await queue.stop()
+
+    expect(seen).toEqual([])
+    expect(await store.get_job("in_4")).toMatchObject({
+      status: "done",
+    })
+  })
 })

@@ -150,7 +150,7 @@ type Inbound = {
 
 `workspace` 说明：
 
-- `directory` 是本地目录路径，例如 `/Users/bytedance/workspace/opencode`
+- `directory` 是本地目录路径，例如 `/path/to/opencode`
 - `workspace` 是 OpenCode 控制面的逻辑工作区 ID，不等于目录路径
 - 当请求未携带 `workspace` 时，服务端按当前 `directory/project` 直接处理
 - 当请求携带 `workspace` 时，服务端会先解析该工作区，再把请求路由到它对应的目标目录或远端实例

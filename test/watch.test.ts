@@ -365,6 +365,109 @@ describe("sweep", () => {
     })
   })
 
+  test("completed task is not finished again by later sweep", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const ses = session("ses_chain_done")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_chain_done"))
+    await store.save_task(
+      row("tsk_chain_done", ses.session_id, "in_chain_done", "running"),
+    )
+
+    await sweep(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {},
+        last: "watch done once",
+      }),
+      60000,
+      1000,
+    )
+
+    await sweep(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {},
+        last: "watch done twice",
+      }),
+      120000,
+      1000,
+    )
+
+    expect((await store.get_task("tsk_chain_done"))?.status).toBe("completed")
+    expect(ui.list).toHaveLength(1)
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "green",
+        text: "watch done once",
+      },
+    })
+  })
+
+  test("watchdog does not add another terminal update after boot recovery already finished task", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const ses = session("ses_boot_done")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_boot_done"))
+    await store.save_task(
+      row("tsk_boot_done", ses.session_id, "in_boot_done", "running"),
+    )
+
+    await sweep(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {},
+        last: "final after boot",
+      }),
+      60000,
+      1000,
+    )
+
+    const done = await store.get_task("tsk_boot_done")
+    expect(done?.status).toBe("completed")
+
+    await sweep(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {},
+        last: "final after second sweep",
+      }),
+      120000,
+      1000,
+    )
+
+    expect((await store.get_task("tsk_boot_done"))?.status).toBe("completed")
+    expect(ui.list).toHaveLength(1)
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "green",
+        text: "final after boot",
+      },
+    })
+  })
+
   test("keeps stale running task alive when remote status probe fails", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)

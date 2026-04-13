@@ -1,14 +1,95 @@
 # OpenCode Feishu IMUI
 
-一个面向飞书 IM 的 OpenCode 交互层设计项目。
+一个把 OpenCode 接到飞书 IM 的网关服务。
 
-当前目录已经包含方案文档和第一批实现骨架，后续开发会继续在这个目录内增量推进。
+它负责接收飞书私聊 / 群聊消息，把文本、图片、文件和富文本转换成 OpenCode 可消费的输入，再把执行进度、审批、追问和最终结果回推到飞书。
 
-## 目标
+当前仓库已经不是纯方案稿，已经包含可运行的 Bun 服务、SQLite 持久化、飞书长连接接入、OpenCode HTTP/SSE 对接，以及一批围绕恢复、队列、命令和多模态的自动化测试。
 
-- 让用户可以在飞书私聊或群聊中直接和 OpenCode 交互
-- 复用 OpenCode 已有的会话、事件、权限和提问机制
-- 先做飞书接入，再为后续扩展到其他 IM 预留抽象
+## 你能用它做什么
+
+- 在飞书私聊里直接和 OpenCode 对话
+- 在群聊 thread 中 `@bot` 发起会话，并在同一 thread 继续追问
+- 使用 `/status`、`/abort`、`/new`、`/session`、`/repo`、`/model` 等命令管理会话
+- 上传图片、文件或发送 `post` 富文本，让 OpenCode 基于附件回答
+- 在飞书里处理 OpenCode 的权限审批和问题回问
+
+## 当前状态
+
+- 适合本地联调、小范围飞书联调和安装包内测
+- 已有较完整的持久化、恢复、状态提示和多模态基础能力
+- 已具备安装包构建能力，正式发布前仍需按 [docs/10-release-checklist.md](docs/10-release-checklist.md) 做完整手工回归
+
+## 快速开始
+
+### 1. 最小依赖
+
+- Bun 1.x
+- 一个可访问的 OpenCode Server，默认地址是 `http://127.0.0.1:4096`
+- 本地可写磁盘目录，用于 SQLite 和附件缓存
+- 如果要接真实飞书，还需要飞书企业自建应用
+
+### 2. 安装依赖
+
+```bash
+bun install
+```
+
+### 3. 配置环境变量
+
+先复制环境变量模板：
+
+```bash
+cp .env.example .env
+```
+
+本地最小可跑配置：
+
+```env
+FEISHU_MODE=stdin
+IMUI_DB_PATH=.data/imui.db
+OPENCODE_BASE_URL=http://127.0.0.1:4096
+OPENCODE_USERNAME=opencode
+OPENCODE_PASSWORD=your-password
+OPENCODE_DIRECTORY=/absolute/path/to/your/worktree
+```
+
+说明：
+
+- `FEISHU_MODE=stdin` 表示不用真实飞书，直接从标准输入喂测试消息
+- `IMUI_DB_PATH` 是 SQLite 文件路径；默认会在仓库下创建 `.data/imui.db`
+- `OPENCODE_DIRECTORY` 建议填绝对路径，作为默认工作目录
+- `OPENCODE_PASSWORD` 需要与正在运行的 OpenCode Server 保持一致
+
+### 4. 启动服务
+
+先在另一个终端启动 OpenCode Server：
+
+```bash
+OPENCODE_SERVER_PASSWORD=your-password opencode serve --hostname 127.0.0.1 --port 4096
+```
+
+然后再启动 IMUI：
+
+```bash
+bun run start
+```
+
+开发时可用热重载：
+
+```bash
+bun run dev
+```
+
+### 5. 用 stdin 做一轮本地联调
+
+服务启动后，向 stdin 发送一条 NDJSON 消息：
+
+```json
+{"kind":"message","chat_id":"oc_demo","user_id":"u_1","message_id":"m_1","text":"帮我看一下当前仓库结构"}
+```
+
+如果 OpenCode Server、数据库和目录配置都正确，服务会开始创建任务并输出处理结果。
 
 ## 文档索引
 
@@ -22,6 +103,10 @@
 - `docs/08-module-sketch.md`: 模块职责、接口草图和启动顺序
 - `docs/09-junior-engineer-playbook.md`: 初级工程师接手开发的执行手册和发布前任务清单
 - `docs/10-release-checklist.md`: 发布前环境检查、自动化门禁和飞书手工回归清单
+- `docs/11-packaging-and-install.md`: 安装包构建、安装路径和烟测步骤
+- `docs/12-operations-and-maintenance.md`: 启动前体检、缓存清理、SQLite 备份与迁移
+- `docs/13-feishu-scope-minimum.md`: 飞书最小权限范围和发布前 scope 核对方法
+- `docs/14-end-user-readme.md`: 面向最终安装用户的安装、配置、启动和使用说明
 
 ## 当前结论
 
@@ -77,27 +162,68 @@ Feishu Open Platform
 - 群聊已支持 `@bot` 起新会话，并按 `tenant + chat + thread/root` 隔离上下文；同一 thread 内后续回复可直接继续
 - 已支持当前会话、当前聊天、当前用户三层 repo 绑定；新会话按“会话显式绑定 > 聊天默认 > 用户默认 > 全局默认”选目录
 - 已支持飞书图片、文件和 `post` 富文本消息；多图、图文混排会统一拆成 `text + file parts`，附件-only 输入会先进入“等待补充说明”，用户补一条文本后再一起送入 OpenCode
-
-## 本地运行
-
-```bash
-bun install
-bun run start
-```
-
-可以通过标准输入喂一条测试消息：
-
-```json
-{"kind":"message","chat_id":"oc_demo","user_id":"u_1","message_id":"m_1","text":"帮我看一下当前仓库结构"}
-```
+- `/session`、`/model`、`/repo`、`/workspace` 相关命令已补自动化回归
+- 多图、多附件、附件-only 补充说明、最终回复过滤内部文本等关键多模态场景已补自动化回归
 
 ## 环境变量
 
-- 参考 `.env.example`
-- 当前最关键的是 `IMUI_DB_PATH`、`OPENCODE_BASE_URL`、`OPENCODE_DIRECTORY`、`OPENCODE_PASSWORD`
-- 本地联调默认使用 `FEISHU_MODE=stdin`
-- 飞书长连接运行时需要 `FEISHU_MODE=long_conn`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`
-- `FEISHU_BOT_OPEN_ID` 是可选覆盖项；未配置时，服务会自动拉取应用名做群聊首条 `@bot` 判断
+- 参考 [.env.example](.env.example)
+- 默认模式是 `FEISHU_MODE=stdin`
+- 真实飞书模式需要把 `FEISHU_MODE` 改成 `long_conn`
+
+常用变量：
+
+- `LOG_LEVEL`: 日志级别，默认 `info`
+- `IMUI_DB_PATH`: SQLite 数据库路径，默认 `.data/imui.db`
+- `IMUI_CONFIG_DIR`: 可选；显式指定配置目录
+- `IMUI_DATA_DIR`: 可选；显式指定数据目录
+- `IMUI_ASSET_CACHE_DIR`: 可选；显式指定附件缓存目录
+- `IMUI_BACKUP_DIR`: 可选；显式指定数据库备份目录
+- `IMUI_ASSET_TTL_HOURS`: 附件缓存 TTL，默认 `168`
+- `IMUI_ASSET_MAX_MB`: 附件缓存体积上限，默认 `1024`
+- `IMUI_BACKUP_RETENTION_DAYS`: 备份保留天数，默认 `14`
+- `FEISHU_MODE`: `stdin` / `long_conn` / `off`
+- `FEISHU_APP_ID`: 飞书应用 App ID
+- `FEISHU_APP_SECRET`: 飞书应用 App Secret
+- `FEISHU_BOT_OPEN_ID`: 可选；显式指定 bot open id，群聊首条 `@bot` 判断会更稳定
+- `OPENCODE_BASE_URL`: OpenCode Server 地址，默认 `http://127.0.0.1:4096`
+- `OPENCODE_USERNAME`: OpenCode 用户名，默认 `opencode`
+- `OPENCODE_PASSWORD`: OpenCode 密码
+- `OPENCODE_DIRECTORY`: 默认工作目录
+- `OPENCODE_WORKSPACE`: 默认 workspace
+- `OPENCODE_AGENT`: 默认 agent
+- `OPENCODE_MODEL`: 默认模型
+
+## 飞书模式配置
+
+如果要连真实飞书，至少需要完成下面配置。
+
+### 飞书控制台
+
+- 创建企业自建应用
+- 开启机器人能力
+- 事件订阅方式选择“使用长连接接收事件”
+- 至少订阅 `im.message.receive_v1`
+- 补齐消息接收、发送、图片/文件下载、卡片交互相关 scope
+
+### 本地环境变量
+
+```env
+FEISHU_MODE=long_conn
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=xxx
+FEISHU_BOT_OPEN_ID=ou_xxx
+OPENCODE_BASE_URL=http://127.0.0.1:4096
+OPENCODE_USERNAME=opencode
+OPENCODE_PASSWORD=your-password
+OPENCODE_DIRECTORY=/absolute/path/to/your/worktree
+```
+
+说明：
+
+- `FEISHU_BOT_OPEN_ID` 不是强制项，但建议配置，能减少群聊首条 `@bot` 判断歧义
+- 如果不填 `FEISHU_BOT_OPEN_ID`，服务会回退到按应用名称匹配 mention
+- 真实飞书联调前，请先跑完自动化测试，再按发布清单逐项手工验证
 
 ## 当前支持的 IM 命令
 
@@ -130,6 +256,84 @@ bun run start
 - 事件订阅方式选择“使用长连接接收事件”，至少订阅 `im.message.receive_v1`
 - 应用需要开启机器人能力，并补齐消息发送、接收相关 scope
 
+## 验证命令
+
+在仓库根目录执行：
+
+```bash
+bun test
+bun run typecheck
+bun run release:doctor
+bun run release:check
+bun run db:migrate
+bun run db:backup
+bun run release:build
+```
+
+其中：
+
+- `bun run release:doctor` 会做启动前环境体检
+- `bun run release:check` 会校验静态发布条件，例如环境变量模板、忽略项和发布文档是否齐全
+- `bun run db:migrate` / `bun run db:backup` 用于验证 SQLite 管理链路可用
+
+如果你准备发版或做真实飞书联调，再补一轮 [docs/10-release-checklist.md](docs/10-release-checklist.md) 中的手工回归。
+
+## 安装包构建
+
+默认构建当前机器目标：
+
+```bash
+bun run release:build
+```
+
+构建产物会放在 `dist/release/`，包含：
+
+- 平台对应的单文件二进制
+- `install.sh`
+- `uninstall.sh`
+- `opencode-feishu-imui-service` 服务助手
+- 包内 README、服务说明和安装态 `.env` 模板
+- 对应的 `.tar.gz` 安装包
+
+如果要构建指定目标：
+
+```bash
+bun run release:build -- --target bun-darwin-arm64
+```
+
+支持的打包目标
+
+- `bun-darwin-arm64`
+- `bun-darwin-x64`
+- `bun-linux-arm64`
+- `bun-linux-x64`
+
+更完整的打包与安装说明见 [docs/11-packaging-and-install.md](docs/11-packaging-and-install.md)。
+
+安装后如果希望长期运行，可用：
+
+```bash
+opencode-feishu-imui-service install
+opencode-feishu-imui-service uninstall
+```
+
+在用户级注册 `launchd` / `systemd --user` 服务。
+
+## 运维与安全收口
+
+发布前建议再确认三件事：
+
+- 用 [docs/12-operations-and-maintenance.md](docs/12-operations-and-maintenance.md) 跑一遍 `release:doctor`、缓存清理和 SQLite 备份/迁移检查
+- 用 [docs/13-feishu-scope-minimum.md](docs/13-feishu-scope-minimum.md) 对照飞书控制台，把 scope 收敛到当前功能最小集合
+- 按 [docs/10-release-checklist.md](docs/10-release-checklist.md) 完成一次真实飞书手工回归
+
+## 本地数据与提交注意事项
+
+- 本地数据库默认写到 `.data/`
+- `.env`、`.data/`、日志和常见缓存目录不应提交
+- 如果工作树里已经存在本地 `.env` 或 `.data/`，发版前也要再确认一次它们没有被误加入暂存区
+- 发版前请确认仓库中没有个人 token、临时截图、调试日志或本地附件缓存
+
 ## 群聊规则
 
 - 群聊新 thread 的首条消息需要 `@bot`
@@ -145,4 +349,4 @@ bun run start
 - OpenCode Server: https://opencode.ai/docs/zh-cn/server/
 - OpenCode SDK: https://opencode.ai/docs/zh-cn/sdk/
 - OpenCode Web: https://opencode.ai/docs/zh-cn/web/
-- OpenCode 源码: `/Users/bytedance/workspace/opencode`
+- OpenCode 源码: 独立仓库 `opencode`

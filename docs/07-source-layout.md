@@ -51,6 +51,7 @@ src/app/
   cfg.ts
   boot.ts
   text.ts
+  validate.ts
   health.ts
 ```
 
@@ -58,6 +59,7 @@ src/app/
 
 - `boot.ts` 保留状态机、恢复链路、副作用编排
 - `text.ts` 放纯文案、状态展示、错误映射、恢复提示这类低副作用 helper
+- `validate.ts` 放启动前配置体检和 fail-fast 校验，避免把发布约束散落进 `boot.ts`
 - 后续如果继续降复杂度，优先把“纯 helper”抽离，避免直接改动状态机主链
 
 ### `feishu/`
@@ -194,11 +196,32 @@ src/render/
 ```text
 src/storage/
   db.ts
+  admin.ts
+  cleanup.ts
   session.ts
   task.ts
   msg.ts
   idem.ts
   conn.ts
+```
+
+补充说明：
+
+- `admin.ts` 负责 schema version、迁移和备份命令使用的 SQLite 管理逻辑
+- `cleanup.ts` 负责附件缓存和备份目录的 TTL / 容量清理策略
+
+### `release/`
+
+负责发布门禁、安装包构建和运维脚本。
+
+建议后续文件：
+
+```text
+src/release/
+  check.ts
+  package.ts
+  doctor.ts
+  db.ts
 ```
 
 ## 顶层共享文件

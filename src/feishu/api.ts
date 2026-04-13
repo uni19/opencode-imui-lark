@@ -29,13 +29,50 @@ type CardData = {
   custom?: boolean
 }
 
-function markdown(text: string) {
+type CardElement = {
+  tag: "markdown"
+  content: string
+}
+
+type CardPayload = {
+  schema: "2.0"
+  config: {
+    wide_screen_mode: boolean
+    update_multi?: boolean
+  }
+  header?: {
+    template: string
+    title: {
+      tag: "plain_text"
+      content: string
+    }
+  }
+  body: {
+    elements: CardElement[]
+  }
+}
+
+function imageLabel(alt: string, url: string) {
+  const name = alt.trim() ? `图片（${alt.trim()}）` : "图片"
+  return `${name}：${url}`
+}
+
+export function sanitizeMarkdown(text: string) {
+  return text
+    .replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_, alt: string, url: string) => imageLabel(alt, url))
+    .replace(/<img\b[^>]*src=["'](https?:\/\/[^"']+)["'][^>]*alt=["']([^"']*)["'][^>]*>/gi, (_, url: string, alt: string) =>
+      imageLabel(alt, url),
+    )
+    .replace(/<img\b[^>]*alt=["']([^"']*)["'][^>]*src=["'](https?:\/\/[^"']+)["'][^>]*>/gi, (_, alt: string, url: string) =>
+      imageLabel(alt, url),
+    )
+    .replace(/<img\b[^>]*src=["'](https?:\/\/[^"']+)["'][^>]*>/gi, (_, url: string) => imageLabel("", url))
+}
+
+function markdown(text: string): CardElement {
   return {
-    tag: "div",
-    text: {
-      tag: "lark_md",
-      content: text,
-    },
+    tag: "markdown",
+    content: sanitizeMarkdown(text),
   }
 }
 
@@ -43,9 +80,20 @@ function numbered(list: string[]) {
   return list.map((item, index) => `${index + 1}. ${item}`).join("\n")
 }
 
+function payload(input: Omit<CardPayload, "schema" | "body"> & { elements: CardElement[] }): CardPayload {
+  return {
+    schema: "2.0",
+    config: input.config,
+    header: input.header,
+    body: {
+      elements: input.elements,
+    },
+  }
+}
+
 function approval(body: CardData) {
   const list = ["允许一次", "始终允许", "拒绝"]
-  return {
+  return payload({
     config: {
       wide_screen_mode: true,
       update_multi: true,
@@ -62,11 +110,11 @@ function approval(body: CardData) {
       ...(body.detail ? [markdown(body.detail)] : []),
       markdown(`请直接回复序号继续；如需拒绝并补充说明，也可以直接发送文本。\n${numbered(list)}`),
     ],
-  }
+  })
 }
 
 function status(body: CardData) {
-  return {
+  return payload({
     config: {
       wide_screen_mode: true,
       update_multi: true,
@@ -82,7 +130,7 @@ function status(body: CardData) {
       ...(body.step ? [markdown(`**${body.step}**`)] : []),
       markdown(body.text ?? ""),
     ],
-  }
+  })
 }
 
 function question(body: CardData) {
@@ -94,7 +142,7 @@ function question(body: CardData) {
         ? `请优先回复序号继续；如需多选，可回复 1,2；如需自定义回答，也可以直接发送文字。\n${numbered(list)}`
         : `请直接回复序号继续；如需多选，可回复 1,2。\n${numbered(list)}`
 
-  return {
+  return payload({
     config: {
       wide_screen_mode: true,
       update_multi: true,
@@ -109,10 +157,10 @@ function question(body: CardData) {
     elements: [
       markdown(hint),
     ],
-  }
+  })
 }
 
-function card(body: unknown) {
+export function buildCard(body: unknown) {
   if (!body || typeof body !== "object") return {}
   const val = body as CardData
   if (val.type === "approval") return approval(val)
@@ -129,7 +177,7 @@ function data(out: RenderOut) {
     })
   }
 
-  return JSON.stringify(card(out.body))
+  return JSON.stringify(buildCard(out.body))
 }
 
 type Data = {

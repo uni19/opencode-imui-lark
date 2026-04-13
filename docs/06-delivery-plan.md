@@ -73,6 +73,7 @@
 - `boot.ts` 中纯文案、状态展示、错误映射 helper 已开始拆到 `src/app/text.ts`，在不改状态机语义的前提下，主文件复杂度和后续交接成本已下降一层
 - 通用运行时错误提示已开始区分“可稍后重试”和“需要重发附件 / 重发上一条消息”，主链 `render.err` 已接入带建议的用户提示
 - 已补最小自动化回归：命令解析、持久化队列恢复 / 去重 / 重试、消息入口去重入队、`recover()` 关键分支、`waiting_permission / waiting_question / waiting_attachment` 恢复、`on_event()` 的审批 / 问题 / 完成态推进、迟到事件保护、OpenCode SSE 连接失败状态推进、watchdog 远端状态对账、payload 级卡片去重、错误映射与连接提示节流、模型 / 附件错误分级、SQLite 落盘集成测试、富文本 / 附件解析、等待态数字序号语义、`patch` 降级为 reply/send
+- 发布硬化已开始落地：启动前配置体检、附件缓存 TTL / 容量清理、SQLite 备份 / 迁移命令、最小 scope 与运维文档已接入发布链
 
 ### 当前主要缺口
 
@@ -293,6 +294,72 @@ IMUI 是服务端运行时，不是浏览器前端，因此应当更接近 OpenC
 
 ## 风险与对策
 
+## Task Pack 执行记录
+
+### 2026-04-13 - Task Pack 1
+
+- 改动范围：围绕 boot 后 active task 恢复补齐 `recover / on_conn / sweep` 衔接回归，覆盖 boot 后 `queued` 任务在 OpenCode ready 后继续推进、boot 后 `running` 任务自动收尾，以及恢复完成后 watchdog 不再重复结束同一任务
+- 自动化验证：`bun test test/recover.test.ts test/boot.test.ts test/watch.test.ts test/probe.test.ts` 通过；后续全量验证已覆盖这些分支
+- 飞书手工验证：本轮未执行，待真实联调时按发布清单补齐
+- 结果：Task Pack 1 的“重启后的 active task 恢复”主链已补到自动化回归，`recover -> resume -> sweep` 的重复完成 / 重复失败风险进一步收紧
+- 遗留问题：真实飞书与真实 OpenCode 服务重启联调仍未完成，active task 恢复的最终体验还需人工确认
+
+### 2026-04-13 - Task Pack 2
+
+- 改动范围：继续收紧队列恢复、迟到事件和事件幂等，补齐重复 session error、迟到 idle、已完成 job 重放保护等回归，确保 replay / late event 不再污染已收尾任务
+- 自动化验证：`bun test test/queue.test.ts test/event.test.ts test/dispatch.test.ts test/ingest.test.ts` 通过；后续全量验证已覆盖这些用例
+- 飞书手工验证：本轮未执行，待真实联调时按发布清单补齐
+- 结果：Task Pack 2 的幂等与重放保护继续收紧，重复入队、迟到 idle/error、completed job 重放等常见风险已有自动化托底
+- 遗留问题：如后续发现需要更复杂的持久化幂等 key 或新落盘字段，仍需升级给资深工程师 review
+
+### 2026-04-13 - Task Pack 3
+
+- 改动范围：继续补错误映射与长耗时提示，覆盖 `invalid_api_key`、`model_not_found`、超时、飞书卡片请求失败等错误文案，以及 queued / acked / running 阶段的 stuck 提示分级
+- 自动化验证：`bun test test/error.test.ts test/boot.test.ts test/watch.test.ts` 通过；`bun run typecheck` 通过
+- 飞书手工验证：本轮未执行，待真实联调时按发布清单补齐
+- 结果：Task Pack 3 的用户提示进一步统一，用户在认证失败、模型不可用、网络超时、卡片更新失败和长耗时卡住时能看到更明确的下一步建议
+- 遗留问题：provider 特定错误模式和真实飞书卡片失败场景仍可继续补细
+
+### 2026-04-13 - Task Pack 4
+
+- 改动范围：补齐 `session / model / repo / workspace` 相关命令解析与 `boot` 主链回归，覆盖 `/status`、`/sessions`、`/new`、`/session`、`/repo`、`/repo --chat`、`/repo --me`、`/repo --workspace`、`/model`、`/model <provider>/<model>`、`/model reset`
+- 自动化验证：`bun test test/cmd.test.ts test/boot.test.ts test/error.test.ts` 通过；后续合并验证也已覆盖这些用例
+- 飞书手工验证：本轮未执行，待真实联调时按发布清单补齐
+- 结果：Task Pack 4 的自动化收口已完成，关键命令路径已有回归保护
+- 遗留问题：仍缺真实飞书环境下的组合切换手工验证
+
+### 2026-04-13 - Task Pack 5
+
+- 改动范围：补齐多图、多附件、附件-only 连续补充、最终回复过滤内部文本等回归；同时细化 `model_not_found` 的用户提示映射
+- 自动化验证：`bun test test/map.test.ts test/message-flow.test.ts test/opencode-client.test.ts test/boot.test.ts test/cmd.test.ts test/error.test.ts` 通过；`bun run typecheck` 通过
+- 飞书手工验证：本轮未执行，待真实联调时按发布清单补齐
+- 结果：Task Pack 5 的目标场景已有自动化覆盖，常见内部文本泄漏和附件累积场景已有稳定保护
+- 遗留问题：仍缺真实飞书里的图片 / 文件上传手工回归
+
+### 2026-04-13 - Task Pack 6
+
+- 改动范围：补齐发布前文档与门禁，新增 `release:check` 静态校验脚本，覆盖 README、`.env.example`、`.gitignore`、发布清单与交付计划之间的关键一致性；同时补一条 `waiting_question` 允许自由文本回答的回归，用于排查真实飞书中的 `/init` 追问问题；后续又把 `release:check` 扩成验证命令与内建 slash 命令清单的一致性检查，降低 README / 发布清单 / 脚本之间的漂移风险
+- 自动化验证：`bun test`、`bun run typecheck`、`bun run release:check` 通过；`test/release.test.ts` 与 `test/boot.test.ts` 新增用例已纳入全量验证
+- 飞书手工验证：本轮仍未执行；真实飞书回归需按 `docs/10-release-checklist.md` 的 A-E 清单逐项补齐
+- 结果：Task Pack 6 的本地发布准备与静态门禁已落地，发布前的文档一致性和基础漏项已有自动化保护
+- 遗留问题：真实飞书中的 slash、多模态、等待态与重启恢复仍需人工联调确认；`/init` 追问问题的线上现象更可能出在事件 payload 或路由上下文，而非本地 `waiting_question` 文本回复分支
+
+### 2026-04-13 - Task Pack 7
+
+- 改动范围：补齐安装包发布链路，新增 `release:build` 打包脚本、安装包 README、`install.sh` / `uninstall.sh`、配置加载顺序约定，以及安装态配置模板；同时让运行时支持 `--env-file` 和默认配置目录回退，避免安装后依赖当前工作目录
+- 自动化验证：`bun test`、`bun run typecheck`、`bun run release:check`、`bun run release:build` 通过；新增 `test/env.test.ts` 与 `test/package.test.ts` 已纳入全量验证
+- 飞书手工验证：本轮未执行；安装包发布前仍需按 `docs/10-release-checklist.md` 完成真实飞书回归
+- 结果：项目已经具备“源码可运行 + 安装包可构建 + 安装后有固定配置目录”的基础发布能力
+- 遗留问题：尚未提供 Windows 安装包和自动更新能力；常驻运行当前以用户级 `launchd` / `systemd --user` 服务助手为主
+
+### 2026-04-13 - Task Pack 8
+
+- 改动范围：补齐发布约束和安全收口，新增启动前 `release:doctor`、SQLite `db:migrate` / `db:backup`、运行时缓存清理、备份保留策略，以及 scope / 运维文档
+- 自动化验证：新增配置校验、清理策略、SQLite 管理回归；并把 `release:doctor`、数据库管理命令、新文档和新环境变量纳入 `release:check`
+- 飞书手工验证：本轮未执行；scope 最小化仍需按 `docs/13-feishu-scope-minimum.md` 在飞书控制台人工确认
+- 结果：安装包发布链之外，发布前体检、运行时数据治理、SQLite 运维和 scope 收口也已有明确执行路径
+- 遗留问题：scope 仍需依赖控制台人工核对；数据库 restore 当前仍为手工流程
+
 ## 风险 1: 连接抖动导致状态错乱
 
 对策：
@@ -314,7 +381,7 @@ IMUI 是服务端运行时，不是浏览器前端，因此应当更接近 OpenC
 
 - SQLite 只存元数据
 - 文件本体落缓存目录
-- 做 TTL 和大小清理策略
+- 启动时执行 TTL 和大小清理策略
 
 ## 风险 4: 多模态输入和等待态任务串线
 

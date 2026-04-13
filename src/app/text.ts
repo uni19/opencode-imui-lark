@@ -254,6 +254,7 @@ export function friendly(err: unknown): string {
   }
   if (
     low.includes("model not found") ||
+    low.includes("model_not_found") ||
     low.includes("unknown model") ||
     low.includes("unsupported model") ||
     low.includes("invalid model")
@@ -377,6 +378,7 @@ function advice(err: unknown) {
     low.includes("quota exceeded") ||
     low.includes("billing hard limit") ||
     low.includes("model not found") ||
+    low.includes("model_not_found") ||
     low.includes("unknown model") ||
     low.includes("unsupported model") ||
     low.includes("invalid model") ||

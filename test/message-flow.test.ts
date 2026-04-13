@@ -470,4 +470,240 @@ describe("message flow", () => {
       },
     })
   })
+
+  test("builds prompt for multiple images with a single question", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_multi_1", {
+        text: "比较这两张图的差异",
+        assets: [
+          {
+            kind: "image",
+            key: "img_1",
+            name: "before.png",
+          },
+          {
+            kind: "image",
+            key: "img_2",
+            name: "after.png",
+          },
+        ],
+      }),
+    )
+
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]?.parts).toHaveLength(3)
+    expect((ai.prompts[0]?.parts?.[0] as { text?: string } | undefined)?.text).toContain("附件概览：2 张图片")
+    expect((ai.prompts[0]?.parts?.[0] as { text?: string } | undefined)?.text).toContain("1. 图片 before.png")
+    expect((ai.prompts[0]?.parts?.[0] as { text?: string } | undefined)?.text).toContain("2. 图片 after.png")
+    expect((ai.prompts[0]?.parts?.[0] as { text?: string } | undefined)?.text).toContain("用户要求：比较这两张图的差异")
+    expect(ai.prompts[0]?.parts?.[1]).toMatchObject({
+      type: "file",
+      filename: "before.png",
+      mime: "image/png",
+    })
+    expect(ai.prompts[0]?.parts?.[2]).toMatchObject({
+      type: "file",
+      filename: "after.png",
+      mime: "image/png",
+    })
+  })
+
+  test("keeps accumulating attachments across repeated attachment-only followups", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_hold_1", {
+        assets: [
+          {
+            kind: "file",
+            key: "file_1",
+            name: "spec.pdf",
+          },
+        ],
+      }),
+    )
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_hold_2", {
+        assets: [
+          {
+            kind: "image",
+            key: "img_1",
+            name: "cover.png",
+          },
+        ],
+      }),
+    )
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_hold_3", {
+        assets: [
+          {
+            kind: "file",
+            key: "file_2",
+            name: "notes.txt",
+          },
+        ],
+      }),
+    )
+
+    expect((await store.get_last_task("ses_1"))?.status).toBe("waiting_attachment")
+    expect((await store.get_last_task("ses_1"))?.note).toBe("等待补充说明，已累计 1 张图片，2 个文件")
+    expect(await store.get_pending("ses_1")).toMatchObject({
+      assets: [
+        { kind: "file", key: "file_1" },
+        { kind: "image", key: "img_1" },
+        { kind: "file", key: "file_2" },
+      ],
+    })
+    expect(ui.list.at(-1)).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          text: "又收到 1 个文件，当前累计 1 张图片，2 个文件，请再发一句你希望我做什么。",
+        },
+      },
+    })
+    expect(ai.prompts).toHaveLength(0)
+  })
+
+  test("submits all accumulated files and images after repeated attachment-only turns", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_final_1", {
+        assets: [
+          {
+            kind: "file",
+            key: "file_1",
+            name: "brief.pdf",
+          },
+        ],
+      }),
+    )
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_final_2", {
+        assets: [
+          {
+            kind: "image",
+            key: "img_1",
+            name: "shot.png",
+          },
+        ],
+      }),
+    )
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_final_3", {
+        text: "请结合这些材料给我最终结论",
+      }),
+    )
+
+    expect(await store.get_pending("ses_1")).toBeNull()
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]?.parts).toHaveLength(3)
+    expect((ai.prompts[0]?.parts?.[0] as { text?: string } | undefined)?.text).toContain("附件概览：1 张图片，1 个文件")
+    expect((ai.prompts[0]?.parts?.[0] as { text?: string } | undefined)?.text).toContain("1. 文件 brief.pdf")
+    expect((ai.prompts[0]?.parts?.[0] as { text?: string } | undefined)?.text).toContain("2. 图片 shot.png")
+    expect((ai.prompts[0]?.parts?.[0] as { text?: string } | undefined)?.text).toContain("用户要求：请结合这些材料给我最终结论")
+    expect(ai.prompts[0]?.parts?.[1]).toMatchObject({
+      type: "file",
+      filename: "brief.pdf",
+      mime: "application/pdf",
+    })
+    expect(ai.prompts[0]?.parts?.[2]).toMatchObject({
+      type: "file",
+      filename: "shot.png",
+      mime: "image/png",
+    })
+  })
 })

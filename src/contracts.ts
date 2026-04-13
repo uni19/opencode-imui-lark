@@ -241,6 +241,15 @@ export type AppCfg = {
   storage: {
     path: string
   }
+  runtime?: {
+    config_dir: string
+    data_dir: string
+    asset_dir: string
+    asset_ttl_hours: number
+    asset_max_mb: number
+    backup_dir: string
+    backup_retention_days: number
+  }
   feishu: {
     mode: FeishuMode
     app_id?: string

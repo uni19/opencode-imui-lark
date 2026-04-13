@@ -1,10 +1,16 @@
 {
   "name": "opencode-feishu-imui",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "bun --watch src/app/main.ts",
     "start": "bun src/app/main.ts",
+    "release:build": "bun src/release/package.ts",
+    "release:check": "bun src/release/check.ts",
+    "release:doctor": "bun src/release/doctor.ts",
+    "db:backup": "bun src/release/db.ts backup",
+    "db:migrate": "bun src/release/db.ts migrate",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

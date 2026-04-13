@@ -24,6 +24,7 @@ import type {
 } from "../contracts.js"
 import { cfg } from "./cfg.js"
 import { createSqliteStore } from "../storage/db.js"
+import { cleanupDir } from "../storage/cleanup.js"
 import { createRender } from "../render/text.js"
 import { createFeishuApi } from "../feishu/api.js"
 import { createOpencodeSvc } from "../opencode/client.js"
@@ -34,6 +35,7 @@ import { createGateway } from "../gateway/ingest.js"
 import { createFeishuConn } from "../feishu/conn.js"
 import { createOpencodeEvent } from "../opencode/event.js"
 import { parseCmd } from "../gateway/cmd.js"
+import { LOCAL_COMMANDS } from "./commands.js"
 import {
   ameta,
   done_msg,
@@ -112,21 +114,7 @@ async function prefs(store: Store, inbound: InboundMessage) {
 }
 
 function local() {
-  return [
-    { name: "/help", description: "查看帮助" },
-    { name: "/status", description: "查看当前会话状态" },
-    { name: "/abort", description: "取消当前执行" },
-    { name: "/new", description: "新建会话" },
-    { name: "/session", description: "查看或切换当前会话" },
-    { name: "/repo", description: "查看或绑定目录 / workspace" },
-    { name: "/sessions", description: "查看当前目录下最近会话" },
-    { name: "/model", description: "查看或切换当前模型" },
-    { name: "/skills", description: "查看当前可用技能" },
-    { name: "/commands", description: "查看当前可转发 slash 命令" },
-    { name: "/agents", description: "查看当前可用 agent" },
-    { name: "/models", description: "查看当前已连接 provider / model" },
-    { name: "/mcps", description: "查看当前 MCP 状态" },
-  ]
+  return LOCAL_COMMANDS
 }
 
 function help() {
@@ -137,10 +125,10 @@ function help() {
     "/repo --me 为当前用户设置默认目录",
     "--chat / --me 可与 --workspace 组合使用",
     "未命中的 slash 会尝试透传到 OpenCode 执行，例如 /init",
-    "示例：/repo /Users/bytedance/workspace/opencode",
-    "示例：/repo --chat /Users/bytedance/workspace/opencode",
+    "示例：/repo /path/to/opencode",
+    "示例：/repo --chat /path/to/opencode",
     "示例：/repo --workspace ws_local",
-    "示例：/repo /Users/bytedance/workspace/opencode --workspace ws_local",
+    "示例：/repo /path/to/opencode --workspace ws_local",
     "示例：/sessions",
     "示例：/session ses_xxx",
     "示例：/agents",
@@ -1828,7 +1816,7 @@ export async function on_conn(
   await recover(conf, store, task, feishu, render, opencode, "opencode")
 }
 
-async function on_cmd(
+export async function on_cmd(
   text: string,
   conf: AppCfg,
   route: ReturnType<typeof createSessionSvc>,
@@ -3122,13 +3110,45 @@ export async function on_msg(
     })
 }
 
-export function createApp(): App {
-  const conf = cfg()
+async function housekeep(conf: AppCfg) {
+  const asset_dir =
+    conf.runtime?.asset_dir ??
+    path.join(conf.storage.path === ":memory:" ? path.resolve(process.cwd(), ".data") : path.dirname(conf.storage.path), "asset")
+  const backup_dir =
+    conf.runtime?.backup_dir ??
+    path.join(conf.storage.path === ":memory:" ? path.resolve(process.cwd(), ".data") : path.dirname(conf.storage.path), "backup")
+  const asset_ttl_ms = (conf.runtime?.asset_ttl_hours ?? 7 * 24) * 60 * 60 * 1000
+  const asset_max_bytes = (conf.runtime?.asset_max_mb ?? 1024) * 1024 * 1024
+  const backup_ttl_ms = (conf.runtime?.backup_retention_days ?? 14) * 24 * 60 * 60 * 1000
+  const out = await Promise.all([
+    cleanupDir(asset_dir, {
+      ttl_ms: asset_ttl_ms,
+      max_bytes: asset_max_bytes,
+    }),
+    cleanupDir(backup_dir, {
+      ttl_ms: backup_ttl_ms,
+    }),
+  ])
+
+  for (const item of out) {
+    if (item.removed === 0 && item.freed_bytes === 0) continue
+    console.log(
+      JSON.stringify({
+        type: "runtime.cleanup",
+        ...item,
+      }),
+    )
+  }
+}
+
+export function createApp(conf = cfg()): App {
   const store = createSqliteStore(conf.storage.path)
   const render = createRender()
   const feishu = createFeishuApi({
     ...conf.feishu,
-    cache: path.join(conf.storage.path === ":memory:" ? path.resolve(process.cwd(), ".data") : path.dirname(conf.storage.path), "asset"),
+    cache:
+      conf.runtime?.asset_dir ??
+      path.join(conf.storage.path === ":memory:" ? path.resolve(process.cwd(), ".data") : path.dirname(conf.storage.path), "asset"),
   })
   const opencode = createOpencodeSvc(conf)
   const route = createSessionSvc({
@@ -3220,6 +3240,9 @@ export function createApp(): App {
   return {
     cfg: conf,
     async start() {
+      await housekeep(conf).catch((err) => {
+        console.warn("[runtime.cleanup]", err instanceof Error ? err.message : String(err))
+      })
       await queue.start()
       await event.start()
       await conn.start()
