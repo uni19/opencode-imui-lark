@@ -38,7 +38,7 @@ const docs = [
   "docs/06-delivery-plan.md",
 ]
 
-const gate = ["bun test", "bun run typecheck", "bun run release:doctor", "bun run release:check", "bun run release:build"]
+const gate = ["bun test", "bun run typecheck", "bun run release:doctor", "bun run release:check", "bun run release:gate", "bun run release:build", "bun run release:smoke"]
 const admin = ["bun run db:migrate", "bun run db:backup"]
 
 function lines(text: string) {
@@ -118,7 +118,7 @@ export function check(root = process.cwd()) {
     if (!has(rel, "bun run release:build")) out.push("发布清单缺少安装包构建命令")
     if (done < 3) out.push("delivery plan 缺少 Task Pack 4-6 执行记录")
     if (!docs.every((item) => existsSync(path.join(root, item)))) out.push("发布文档不完整")
-    if (miss(Object.keys(json.scripts ?? {}), ["test", "typecheck", "release:check", "release:doctor", "release:build", "db:backup", "db:migrate"]).length > 0) {
+    if (miss(Object.keys(json.scripts ?? {}), ["test", "typecheck", "release:check", "release:doctor", "release:gate", "release:build", "release:smoke", "db:backup", "db:migrate"]).length > 0) {
       out.push("package.json 缺少发布或运维脚本")
     }
     if (miss(gate, gate.filter((item) => has(readme, item))).length > 0) out.push("README.md 缺少发布验证命令")

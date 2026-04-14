@@ -46,11 +46,12 @@ bun run release:build -- \
 
 ```text
 dist/release/
-  opencode-feishu-imui-<version>-<target>/
   opencode-feishu-imui-<version>-<target>.tar.gz
 ```
 
-解压后的目录包含：
+默认发布产物是 `.tar.gz` 安装包；解压后的目录包含：
+
+如果在同一 `outdir` 下重复构建，同一 target 的新归档会自动追加时间戳后缀，避免覆盖旧产物。
 
 - `bin/opencode-feishu-imui`: 编译后的真实二进制
 - `install.sh`: 安装脚本
@@ -143,9 +144,11 @@ bun test
 bun run typecheck
 bun run release:doctor
 bun run release:check
+bun run release:gate
 bun run db:migrate
 bun run db:backup
 bun run release:build
+bun run release:smoke
 ```
 
 然后再做一次安装包烟测：
@@ -157,6 +160,24 @@ bun run release:build
 5. 回到源码仓库，用安装态配置再跑一遍 `bun run release:doctor -- --env-file ~/.config/opencode-feishu-imui/.env`
 6. 如需要常驻运行，再执行一次 `opencode-feishu-imui-service install`
 7. 按 [docs/10-release-checklist.md](10-release-checklist.md) 做飞书回归
+
+如果你希望把上面的自动化门禁一次跑完，直接执行：
+
+```bash
+bun run release:gate
+```
+
+如果你只想对已经构建出的安装包再做一轮自动烟测，可执行：
+
+```bash
+bun run release:smoke
+```
+
+若想直接用安装态生成的配置文件跑完整门禁，可执行：
+
+```bash
+bun run release:gate -- --env-file ~/.config/opencode-feishu-imui/.env
+```
 
 仓库内还有一份对应的最终用户说明，可作为发布附件或对外文档来源：
 

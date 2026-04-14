@@ -40,7 +40,7 @@
 
 ### 当前质量基线
 
-- `bun test` 通过，当前为 `97` 条通过
+- `bun test` 通过，当前为 `97+` 条通过
 - `bun run typecheck` 通过
 - 测试文件共 `16` 个
 - 方案文档、交互文档、模块文档都已经落盘
@@ -150,6 +150,21 @@ bun run typecheck
 
 如果要改这些语义，必须先和资深工程师确认。
 
+### 规则 6：涉及 session 切换语义时，先读设计文档
+
+如果任务涉及：
+
+- `/session`
+- `/new`
+- 后台任务
+- 等待态是否立即显示
+
+必须先阅读：
+
+- `docs/15-background-session-switch.md`
+
+不要在没有设计约束的前提下，直接把 TUI 语义搬到 IMUI。
+
 ## 发布前的判断标准
 
 只有同时满足下面几类条件，才算接近“可发布”：
@@ -188,6 +203,57 @@ bun run typecheck
 下面是建议初级工程师按顺序执行的任务包。
 
 顺序不要乱。
+
+---
+
+## Task Pack 1A：后台会话切换
+
+状态：
+
+- 已完成首版实现
+
+### 优先级
+
+高。
+
+### 背景
+
+当前 `/session` 遇到 live task 仍会阻止切换，`/new` 仍会中止旧任务。
+
+更合理的 IMUI 语义是：
+
+- `running` 可以留在后台继续执行
+- `waiting_permission / waiting_question / waiting_attachment` 不直接抢当前前台，而是等用户切回该 session 再显示
+
+详细设计见：
+
+- `docs/15-background-session-switch.md`
+
+### 重点文件
+
+- `src/app/boot.ts`
+- `src/app/text.ts`
+- `test/boot.test.ts`
+- `test/event.test.ts`
+- `test/message-flow.test.ts`
+- `test/recover.test.ts`
+- `test/watch.test.ts`
+
+### 实施要求
+
+1. 首版不要新增数据库 schema
+2. 首版不要新增 `/task` 级命令
+3. `/session` 和 `/new` 的 live task 语义先改成“不自动 abort”
+4. 后台等待态必须延迟显示，不能和当前前台 session 抢卡片
+5. `/sessions` 或 `/status` 至少一处要能看见后台等待态
+
+### 最小验收
+
+- `/session <id>` 可在旧任务 live 时切换
+- `/new` 不再中止旧 task
+- 后台 `waiting_permission / waiting_question / waiting_attachment` 不立即显示
+- 切回对应 session 后，等待态能正确恢复展示
+- `recover / resume / sweep` 不会把后台等待态自动弹回前台
 
 ---
 

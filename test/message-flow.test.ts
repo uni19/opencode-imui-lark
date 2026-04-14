@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { on_msg } from "../src/app/boot.ts"
+import { holdmsg, on_msg } from "../src/app/boot.ts"
 import type { AppCfg, FeishuApi, InboundMessage, OpencodeSvc, RenderOut } from "../src/contracts.ts"
 import { createSessionSvc } from "../src/gateway/session.ts"
 import { createTaskSvc } from "../src/gateway/task.ts"
@@ -84,8 +84,14 @@ function opencode() {
         seq += 1
         return { id: `ses_${seq}` }
       },
-      async session() {
-        return null
+      async session(id: string) {
+        return {
+          id,
+          title: `Session ${id}`,
+          directory: "/tmp",
+          created_at: 1,
+          updated_at: 1,
+        }
       },
       async sessions() {
         return []
@@ -400,7 +406,7 @@ describe("message flow", () => {
     })
   })
 
-  test("creates a new session from waiting_attachment without remote abort", async () => {
+  test("creates a new session from waiting_attachment without remote abort and replays wait when switched back", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
     const ui = feishu()
@@ -446,9 +452,8 @@ describe("message flow", () => {
       }),
     )
 
-    expect((await store.get_task_by_inbound("in_new_1"))?.status).toBe("aborted")
-    expect((await store.get_task_by_inbound("in_new_1"))?.note).toBe("已取消等待中的附件上下文，并创建新会话。")
-    expect(await store.get_pending("ses_1")).toBeNull()
+    expect((await store.get_task_by_inbound("in_new_1"))?.status).toBe("waiting_attachment")
+    expect(await store.get_pending("ses_1")).not.toBeNull()
     expect(ai.aborts).toHaveLength(0)
     expect(
       await store.get_session({
@@ -466,6 +471,46 @@ describe("message flow", () => {
         kind: "text",
         body: {
           text: "已创建新会话。\n目录：/tmp",
+        },
+      },
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_new_3", {
+        text: "/session ses_1",
+      }),
+    )
+
+    expect(ui.list.at(-2)).toMatchObject({
+      kind: "reply",
+      out: {
+        kind: "text",
+        body: {
+          text: "已切换当前会话。\nsession: ses_1\n目录：/tmp\n模型：openai/gpt-5.4",
+        },
+      },
+    })
+    expect(ui.list.at(-1)).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          text: holdmsg([
+            {
+              kind: "image",
+              key: "img_1",
+              mime: "image/png",
+              url: "file:///tmp/img_1",
+              name: "img_1",
+            },
+          ]),
         },
       },
     })

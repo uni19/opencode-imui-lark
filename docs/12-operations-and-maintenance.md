@@ -156,6 +156,26 @@ bun run db:migrate
 bun run db:backup
 ```
 
+如果准备正式发版，推荐直接执行：
+
+```bash
+bun run release:gate
+```
+
+它会顺序跑完测试、类型检查、体检、静态检查、迁移、备份、安装包构建和安装包烟测。
+
+如需指定安装态配置文件，可直接透传：
+
+```bash
+bun run release:gate -- --env-file /path/to/.env
+```
+
+如果只想对构建好的安装包做一轮自动烟测，可直接执行：
+
+```bash
+bun run release:smoke
+```
+
 如果这是安装包环境，则建议再补一轮：
 
 1. 安装后运行 `opencode-feishu-imui --help`

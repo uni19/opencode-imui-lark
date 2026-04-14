@@ -108,7 +108,7 @@ function approval(body: CardData) {
     elements: [
       markdown(`**工具:** ${body.tool ?? "tool"}`),
       ...(body.detail ? [markdown(body.detail)] : []),
-      markdown(`请直接回复序号继续；如需拒绝并补充说明，也可以直接发送文本。\n${numbered(list)}`),
+      markdown(`请直接回复序号继续；如需更正本次操作，也可以直接发送文本。\n${numbered(list)}`),
     ],
   })
 }

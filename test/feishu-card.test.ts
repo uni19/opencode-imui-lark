@@ -35,6 +35,7 @@ describe("feishu card rendering", () => {
 
     expect(approval.schema).toBe("2.0")
     expect(approval.body?.elements?.every((item: any) => item.tag === "markdown")).toBe(true)
+    expect(approval.body?.elements?.[2]?.content).toContain("如需更正本次操作")
     expect(question.schema).toBe("2.0")
     expect(question.body?.elements?.[0]?.tag).toBe("markdown")
     expect(question.body?.elements?.[0]?.content).toContain("1. A")

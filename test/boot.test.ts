@@ -1889,6 +1889,90 @@ describe("commands", () => {
     })
   })
 
+  test("/session <id> switches even when current task is running", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(row())
+    const oc = {
+      ...opencode(),
+      async session(id: string) {
+        return {
+          id,
+          title: "picked",
+          directory: "/tmp/alt",
+          workspace_id: "ws_alt",
+          created_at: 1,
+          updated_at: 1,
+        } satisfies OpencodeSession
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd("/session ses_alt", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/session ses_alt" }))
+
+    expect(ok).toBeTrue()
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: [
+          "已切换当前会话。",
+          "session: ses_alt",
+          "目录：/tmp/alt (workspace=ws_alt)",
+          "模型：anthropic/claude-sonnet-4",
+        ].join("\n"),
+      },
+    })
+    expect((await store.get_task("tsk_1"))?.status).toBe("running")
+  })
+
+  test("/session <id> replays deferred approval when switched back", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ session_id: "ses_current" }))
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        session_id: "ses_wait",
+        status: "waiting_permission",
+        req: "req_1",
+        note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/tmp" }))}`,
+        outbound_id: "out_wait",
+      }),
+    )
+    const oc = {
+      ...opencode(),
+      async session(id: string) {
+        return {
+          id,
+          title: "picked",
+          directory: "/tmp",
+          created_at: 1,
+          updated_at: 1,
+        } satisfies OpencodeSession
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd("/session ses_wait", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/session ses_wait" }))
+
+    expect(ok).toBeTrue()
+    expect(ui.list[0]?.kind).toBe("reply")
+    expect(ui.list[1]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          type: "approval",
+          req: "req_1",
+          tool: "external_directory",
+          detail: JSON.stringify({ filepath: "/tmp" }),
+        },
+      },
+    })
+  })
+
   test("/repo shows session over chat and user defaults", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
@@ -2065,6 +2149,54 @@ describe("commands", () => {
     expect(text).toContain("目录: /tmp/chat (workspace=ws_chat)")
   })
 
+  test("/sessions surfaces deferred waiting state from local task", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "ws_chat" }))
+    await store.save_task(
+      row({
+        session_id: "ses_2",
+        status: "waiting_question",
+      }),
+    )
+    const oc = {
+      ...opencode(),
+      async sessions() {
+        return [
+          {
+            id: "ses_1",
+            title: "current",
+            directory: "/tmp/chat",
+            workspace_id: "ws_chat",
+            created_at: 1,
+            updated_at: 1,
+          },
+          {
+            id: "ses_2",
+            title: "background",
+            directory: "/tmp/chat",
+            workspace_id: "ws_chat",
+            created_at: 1,
+            updated_at: 1,
+          },
+        ]
+      },
+      async status() {
+        return {
+          ses_1: { type: "idle" },
+          ses_2: { type: "idle" },
+        }
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd("/sessions", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/sessions" }))
+
+    expect(ok).toBeTrue()
+    const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("[waiting_question] background")
+  })
+
   test("/new resets session with chat default scope", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
@@ -2094,6 +2226,32 @@ describe("commands", () => {
       kind: "text",
       body: {
         text: ["已创建新会话。", "目录：/tmp/chat-default (workspace=ws_chat_default)"].join("\n"),
+      },
+    })
+  })
+
+  test("/new keeps current running task alive in background", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(row())
+    const oc = {
+      ...opencode(),
+      async abort() {
+        throw new Error("should not abort")
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd("/new", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/new" }))
+
+    expect(ok).toBeTrue()
+    expect((await store.get_task("tsk_1"))?.status).toBe("running")
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: ["已创建新会话。", "目录：/tmp/new"].join("\n"),
       },
     })
   })
@@ -2339,12 +2497,79 @@ describe("commands", () => {
       },
     ])
     expect((await store.get_task("tsk_1"))?.status).toBe("running")
-    expect(ui.list[0]?.out).toMatchObject({
+    expect(ui.list.at(-1)?.out).toMatchObject({
       kind: "card",
       body: {
         title: "OpenCode",
         template: "blue",
         text: "已提交补充信息",
+      },
+    })
+  })
+
+  test("waiting_permission treats direct text as correction and keeps task running", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_permission",
+        req_type: "permission",
+        req: "req_perm_1",
+        note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/usr" }))}`,
+      }),
+    )
+    const calls: Array<{ req: string; reply: "once" | "always" | "reject"; message?: string; workspace?: string }> = []
+    const oc = {
+      ...opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      async allow(input) {
+        calls.push({
+          req: input.req,
+          reply: input.reply,
+          message: input.message,
+          workspace: input.workspace,
+        })
+      },
+    } satisfies OpencodeSvc
+
+    await on_msg(
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({
+        id: "in_perm_2",
+        event_id: "evt_perm_2",
+        message_id: "msg_perm_2",
+        text: "说错了，我要看的是 /tmp/",
+      }),
+    )
+
+    expect(calls).toEqual([
+      {
+        req: "req_perm_1",
+        reply: "reject",
+        message: "说错了，我要看的是 /tmp/",
+        workspace: undefined,
+      },
+    ])
+    expect((await store.get_task("tsk_1"))?.status).toBe("running")
+    expect((await store.get_task("tsk_1"))?.note).toBe("已收到你的更正说明，正在继续执行…")
+    expect(ui.list.at(-1)?.out).toMatchObject({
+      kind: "card",
+      body: {
+        title: "OpenCode",
+        template: "blue",
+        text: "已收到你的更正说明，正在继续执行…",
       },
     })
   })

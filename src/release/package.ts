@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process"
-import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { tmpdir } from "node:os"
 
 const APP = "opencode-feishu-imui"
 const SUPPORTED = ["bun-darwin-arm64", "bun-darwin-x64", "bun-linux-arm64", "bun-linux-x64"] as const
@@ -10,6 +12,13 @@ type Target = (typeof SUPPORTED)[number]
 type BuildArgs = {
   targets: Target[]
   outdir: string
+}
+
+type BuildResult = {
+  version: string
+  outdir: string
+  targets: Target[]
+  artifacts: string[]
 }
 
 function fail(msg: string): never {
@@ -222,6 +231,7 @@ export function renderServiceHelperScript() {
     'DATA_DIR="${DATA_DIR:-$DATA_BASE/$APP}"',
     'LOG_DIR="$DATA_DIR/log"',
     'APP_BIN="$BIN_DIR/$APP"',
+    'DRY_RUN="${IMUI_SERVICE_DRY_RUN:-0}"',
     'cmd="${1:-}"',
     'manager="${2:-}"',
     "",
@@ -263,14 +273,18 @@ export function renderServiceHelperScript() {
     '</dict>',
     '</plist>',
     'EOF',
-    '  launchctl bootout "gui/$(id -u)" "$launchd_file" >/dev/null 2>&1 || launchctl unload "$launchd_file" >/dev/null 2>&1 || true',
-    '  launchctl bootstrap "gui/$(id -u)" "$launchd_file" >/dev/null 2>&1 || launchctl load "$launchd_file"',
+    '  if [ "$DRY_RUN" != "1" ]; then',
+    '    launchctl bootout "gui/$(id -u)" "$launchd_file" >/dev/null 2>&1 || launchctl unload "$launchd_file" >/dev/null 2>&1 || true',
+    '    launchctl bootstrap "gui/$(id -u)" "$launchd_file" >/dev/null 2>&1 || launchctl load "$launchd_file"',
+    "  fi",
     '  echo "Installed launchd user service: $launchd_file"',
     '  echo "Logs: $LOG_DIR"',
     "}",
     "",
     "uninstall_launchd() {",
-    '  launchctl bootout "gui/$(id -u)" "$launchd_file" >/dev/null 2>&1 || launchctl unload "$launchd_file" >/dev/null 2>&1 || true',
+    '  if [ "$DRY_RUN" != "1" ]; then',
+    '    launchctl bootout "gui/$(id -u)" "$launchd_file" >/dev/null 2>&1 || launchctl unload "$launchd_file" >/dev/null 2>&1 || true',
+    "  fi",
     '  rm -f "$launchd_file"',
     '  echo "Removed launchd user service: $launchd_file"',
     "}",
@@ -294,16 +308,22 @@ export function renderServiceHelperScript() {
     '[Install]',
     'WantedBy=default.target',
     'EOF',
-    '  systemctl --user daemon-reload',
-    '  systemctl --user enable --now "$APP.service"',
+    '  if [ "$DRY_RUN" != "1" ]; then',
+    '    systemctl --user daemon-reload',
+    '    systemctl --user enable --now "$APP.service"',
+    "  fi",
     '  echo "Installed systemd user service: $systemd_file"',
     '  echo "Hint: if the service should survive logout, enable lingering for this user."',
     "}",
     "",
     "uninstall_systemd() {",
-    '  systemctl --user disable --now "$APP.service" >/dev/null 2>&1 || true',
+    '  if [ "$DRY_RUN" != "1" ]; then',
+    '    systemctl --user disable --now "$APP.service" >/dev/null 2>&1 || true',
+    "  fi",
     '  rm -f "$systemd_file"',
-    '  systemctl --user daemon-reload >/dev/null 2>&1 || true',
+    '  if [ "$DRY_RUN" != "1" ]; then',
+    '    systemctl --user daemon-reload >/dev/null 2>&1 || true',
+    "  fi",
     '  echo "Removed systemd user service: $systemd_file"',
     "}",
     "",
@@ -449,51 +469,68 @@ async function bundle(root: string, stage: string, target: Target) {
   if (out.status !== 0) fail(`bun build failed for ${target}`)
 }
 
-async function archive(parent: string, base: string) {
-  const out = spawnSync("tar", ["-czf", `${base}.tar.gz`, base], {
+async function archive(parent: string, base: string, outfile: string) {
+  const out = spawnSync("tar", ["-czf", outfile, base], {
     cwd: parent,
     stdio: "inherit",
   })
   if (out.status !== 0) fail(`tar archive failed for ${base}`)
 }
 
-export async function buildRelease(root = process.cwd(), argv = process.argv) {
+function stamp(now = new Date()) {
+  return now.toISOString().replaceAll("-", "").replaceAll(":", "").replaceAll(".", "").replace("T", "-").replace("Z", "Z")
+}
+
+async function archivePath(outdir: string, base: string) {
+  const stable = path.join(outdir, `${base}.tar.gz`)
+  if (!existsSync(stable)) return stable
+  return path.join(outdir, `${base}-${stamp()}.tar.gz`)
+}
+
+export async function buildRelease(root = process.cwd(), argv = process.argv): Promise<BuildResult> {
   const args = parseArgs(argv)
   const outdir = path.resolve(root, args.outdir)
   const pkg = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as { version?: string }
   const version = pkg.version ?? "0.1.0"
   const env = await readFile(path.join(root, ".env.example"), "utf8")
+  const artifacts: string[] = []
 
   await mkdir(outdir, { recursive: true })
 
   for (const target of args.targets) {
     const base = archiveBase(version, target)
-    const stage = path.join(outdir, base)
-    await rm(stage, { recursive: true, force: true })
+    const temp = await mkdtemp(path.join(tmpdir(), `${APP}-${target}-`))
+    const stage = path.join(temp, base)
     await mkdir(path.join(stage, "bin"), { recursive: true })
     await mkdir(path.join(stage, "share"), { recursive: true })
 
-    await bundle(root, stage, target)
-    await cp(path.join(root, "README.md"), path.join(stage, "share", "README-source.md"))
-    await writeFile(path.join(stage, "VERSION"), `${version}\n`)
-    await writeFile(path.join(stage, "share", "README-package.md"), renderPackageReadme(version, target))
-    await writeFile(path.join(stage, "share", "README-service.md"), renderServiceReadme())
-    await writeFile(path.join(stage, "share", "service-helper.sh"), renderServiceHelperScript())
-    await writeFile(path.join(stage, "share", `${APP}.env.example`), renderInstalledEnvExample(env))
-    await writeFile(path.join(stage, "install.sh"), renderInstallScript(version))
-    await writeFile(path.join(stage, "uninstall.sh"), renderUninstallScript())
-    await chmod(path.join(stage, "install.sh"), 0o755)
-    await chmod(path.join(stage, "uninstall.sh"), 0o755)
-    await chmod(path.join(stage, "share", "service-helper.sh"), 0o755)
+    try {
+      await bundle(root, stage, target)
+      await cp(path.join(root, "README.md"), path.join(stage, "share", "README-source.md"))
+      await writeFile(path.join(stage, "VERSION"), `${version}\n`)
+      await writeFile(path.join(stage, "share", "README-package.md"), renderPackageReadme(version, target))
+      await writeFile(path.join(stage, "share", "README-service.md"), renderServiceReadme())
+      await writeFile(path.join(stage, "share", "service-helper.sh"), renderServiceHelperScript())
+      await writeFile(path.join(stage, "share", `${APP}.env.example`), renderInstalledEnvExample(env))
+      await writeFile(path.join(stage, "install.sh"), renderInstallScript(version))
+      await writeFile(path.join(stage, "uninstall.sh"), renderUninstallScript())
+      await chmod(path.join(stage, "install.sh"), 0o755)
+      await chmod(path.join(stage, "uninstall.sh"), 0o755)
+      await chmod(path.join(stage, "share", "service-helper.sh"), 0o755)
 
-    await rm(path.join(outdir, `${base}.tar.gz`), { force: true })
-    await archive(outdir, base)
+      const outfile = await archivePath(outdir, base)
+      await archive(temp, base, outfile)
+      artifacts.push(outfile)
+    } finally {
+      await rm(temp, { recursive: true, force: true })
+    }
   }
 
   return {
     version,
     outdir,
     targets: args.targets,
+    artifacts,
   }
 }
 
@@ -505,6 +542,7 @@ if (import.meta.main) {
       version: out.version,
       outdir: out.outdir,
       targets: out.targets,
+      artifacts: out.artifacts,
     }),
   )
 }

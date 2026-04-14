@@ -183,6 +183,35 @@ describe("on_event", () => {
     })
   })
 
+  test("stores background permission event without surfacing approval card", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    await store.save_session(session("ses_front"))
+    await store.save_inbound(inbound("in_bg_perm"))
+    await store.save_task(row("tsk_bg_perm", "ses_bg_perm", "in_bg_perm"))
+
+    await on_event(store, task, ui.api, render, opencode(), {
+      type: "permission.asked",
+      properties: {
+        sessionID: "ses_bg_perm",
+        id: "req_bg_perm",
+        permission: "external_directory",
+        metadata: {
+          filepath: "/tmp",
+        },
+      },
+    } satisfies OpencodeEvent)
+
+    expect(await store.get_task("tsk_bg_perm")).toMatchObject({
+      status: "waiting_permission",
+      req_type: "permission",
+      req: "req_bg_perm",
+    })
+    expect(ui.list).toEqual([])
+  })
+
   test("turns question event into waiting_question with numbered options", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
@@ -229,6 +258,38 @@ describe("on_event", () => {
         },
       },
     ])
+  })
+
+  test("stores background question event without surfacing question card", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    await store.save_session(session("ses_front"))
+    await store.save_inbound(inbound("in_bg_q"))
+    await store.save_task(row("tsk_bg_q", "ses_bg_q", "in_bg_q"))
+
+    await on_event(store, task, ui.api, render, opencode(), {
+      type: "question.asked",
+      properties: {
+        sessionID: "ses_bg_q",
+        id: "req_bg_q",
+        questions: [
+          {
+            question: "请选择输出形式",
+            custom: true,
+            options: [{ label: "总结" }, { label: "清单" }],
+          },
+        ],
+      },
+    } satisfies OpencodeEvent)
+
+    expect(await store.get_task("tsk_bg_q")).toMatchObject({
+      status: "waiting_question",
+      req_type: "question",
+      req: "req_bg_q",
+    })
+    expect(ui.list).toEqual([])
   })
 
   test("dedups repeated permission event with same req and payload", async () => {

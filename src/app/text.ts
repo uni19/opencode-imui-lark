@@ -119,7 +119,7 @@ function next(
   opencode?: ConnState | null,
 ) {
   if (!row || done(row.status)) return "可直接发送下一条消息。"
-  if (row.status === "waiting_permission") return "请回复 1/2/3；如需拒绝并补充说明，也可直接发送文本。"
+  if (row.status === "waiting_permission") return "请回复 1/2/3；如需更正本次操作，也可直接发送文本。"
   if (row.status === "waiting_question") return "可直接回复序号；若问题允许自由回答，也可发送文本。"
   if (row.status === "waiting_attachment") return "请再发一句你希望我做什么。"
   if (opencode?.status === "reconnecting" || opencode?.status === "error") {

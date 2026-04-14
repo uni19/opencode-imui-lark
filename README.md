@@ -107,6 +107,7 @@ bun run dev
 - `docs/12-operations-and-maintenance.md`: 启动前体检、缓存清理、SQLite 备份与迁移
 - `docs/13-feishu-scope-minimum.md`: 飞书最小权限范围和发布前 scope 核对方法
 - `docs/14-end-user-readme.md`: 面向最终安装用户的安装、配置、启动和使用说明
+- `docs/15-background-session-switch.md`: 后台会话切换与“等待态延迟显示”设计
 
 ## 当前结论
 
@@ -265,16 +266,32 @@ bun test
 bun run typecheck
 bun run release:doctor
 bun run release:check
+bun run release:gate
 bun run db:migrate
 bun run db:backup
 bun run release:build
+bun run release:smoke
 ```
 
 其中：
 
 - `bun run release:doctor` 会做启动前环境体检
 - `bun run release:check` 会校验静态发布条件，例如环境变量模板、忽略项和发布文档是否齐全
+- `bun run release:gate` 会顺序执行测试、体检、迁移、备份、打包和安装包烟测，是发布前的一键门禁
+- `bun run release:smoke` 会自动验证安装包的安装、`--help`、服务助手 install/uninstall 和卸载
 - `bun run db:migrate` / `bun run db:backup` 用于验证 SQLite 管理链路可用
+
+如果你需要指定安装态或临时验证配置，也可以：
+
+```bash
+bun run release:gate -- --env-file /path/to/.env
+```
+
+如果只想对构建好的安装包再做一轮自动烟测，也可以执行：
+
+```bash
+bun run release:smoke
+```
 
 如果你准备发版或做真实飞书联调，再补一轮 [docs/10-release-checklist.md](docs/10-release-checklist.md) 中的手工回归。
 
@@ -286,7 +303,7 @@ bun run release:build
 bun run release:build
 ```
 
-构建产物会放在 `dist/release/`，包含：
+构建产物会放在 `dist/release/`，默认生成对应平台的 `.tar.gz` 安装包；解压后包含：
 
 - 平台对应的单文件二进制
 - `install.sh`
@@ -294,6 +311,8 @@ bun run release:build
 - `opencode-feishu-imui-service` 服务助手
 - 包内 README、服务说明和安装态 `.env` 模板
 - 对应的 `.tar.gz` 安装包
+
+如果在同一 `dist/release/` 下重复构建，同一 target 的新归档可能会自动追加时间戳后缀，避免覆盖旧产物。
 
 如果要构建指定目标：
 
@@ -341,7 +360,7 @@ opencode-feishu-imui-service uninstall
 - 未配置 `FEISHU_BOT_OPEN_ID` 时，新消息按飞书事件里的 mention 名称与应用名匹配
 - 图片、文件和 `post` 富文本中的图片 / 文件节点会下载为本地缓存文件，再作为 OpenCode `file part` 输入
 - 只有附件、没有文字时，bot 会先要求用户补一句“想让我做什么”
-- 等待权限审批时，数字 `1`、`2`、`3` 用于选择；如果直接发送其他文本，会被视为“拒绝并附带说明”
+- 等待权限审批时，数字 `1`、`2`、`3` 用于选择；如果直接发送其他文本，会被视为“更正当前操作并继续执行”
 - 等待问题回问时，如存在选项，优先回复序号；如需多选，可回复 `1,2`；若该问题允许自定义回答，也可以直接发文字
 
 ## 关键参考

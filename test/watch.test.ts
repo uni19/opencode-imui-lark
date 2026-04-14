@@ -365,6 +365,80 @@ describe("sweep", () => {
     })
   })
 
+  test("does not re-show stale waiting approval while task is in background", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session("ses_front"))
+    await store.save_inbound(inbound("in_bg_perm"))
+    await store.save_task({
+      ...row("tsk_bg_perm", "ses_bg_perm", "in_bg_perm", "waiting_permission"),
+      req: "req_bg_perm",
+      note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/tmp" }))}`,
+    })
+
+    await sweep(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {
+          ses_bg_perm: { type: "busy" },
+        },
+      }),
+      60000,
+      1000,
+    )
+
+    expect((await store.get_task("tsk_bg_perm"))?.status).toBe("waiting_permission")
+    expect(ui.list).toHaveLength(0)
+  })
+
+  test("does not remind stale waiting attachment while task is in background", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session("ses_front"))
+    await store.save_inbound(inbound("in_bg_hold"))
+    await store.save_task({
+      ...row("tsk_bg_hold", "ses_bg_hold", "in_bg_hold", "waiting_attachment"),
+      note: "等待补充说明",
+    })
+    await store.save_pending({
+      session_id: "ses_bg_hold",
+      inbound_id: "in_bg_hold",
+      assets: [
+        {
+          kind: "image",
+          key: "img_hold",
+          name: "a.png",
+          mime: "image/png",
+          url: "file:///tmp/a.png",
+        },
+      ],
+      created_at: 1,
+      updated_at: 1,
+    })
+
+    await sweep(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {},
+      }),
+      60000,
+      1000,
+    )
+
+    expect((await store.get_task("tsk_bg_hold"))?.status).toBe("waiting_attachment")
+    expect(ui.list).toHaveLength(0)
+  })
+
   test("completed task is not finished again by later sweep", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)

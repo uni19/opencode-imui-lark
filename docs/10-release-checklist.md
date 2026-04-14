@@ -63,9 +63,23 @@ bun test
 bun run typecheck
 bun run release:doctor
 bun run release:check
+bun run release:gate
 bun run db:migrate
 bun run db:backup
 bun run release:build
+bun run release:smoke
+```
+
+如果需要指定安装态或临时验证配置，可统一用：
+
+```bash
+bun run release:gate -- --env-file /path/to/.env
+```
+
+如果只想针对已经构建出的安装包做自动烟测，可执行：
+
+```bash
+bun run release:smoke
 ```
 
 ### 自动化门禁
@@ -74,9 +88,11 @@ bun run release:build
 - [ ] `bun run typecheck` 全绿
 - [ ] `bun run release:doctor` 全绿
 - [ ] `bun run release:check` 全绿
+- [ ] `bun run release:gate` 全绿
 - [ ] `bun run db:migrate` 可执行
 - [ ] `bun run db:backup` 可执行
 - [ ] `bun run release:build` 可产出目标安装包
+- [ ] `bun run release:smoke` 可完成安装包烟测
 - [ ] 没有新增跳过测试
 - [ ] 没有删除已有恢复/事件/队列相关测试却缺少补充说明
 - [ ] 本次变更影响到的 Task Pack 结果已回写 `docs/06-delivery-plan.md`
@@ -118,6 +134,7 @@ bun run release:build
 - [ ] `/abort`
 - [ ] `/sessions`
 - [ ] `/session <id>`
+- [ ] 正在运行中的 session 可切走到后台继续执行
 - [ ] `/repo`
 - [ ] `/repo --chat <directory>`
 - [ ] `/repo --me <directory>`
@@ -132,9 +149,11 @@ bun run release:build
 
 - [ ] 权限审批能展示
 - [ ] 回复 `1 / 2 / 3` 可正确生效
-- [ ] 非数字文本会按当前语义走“拒绝并附带说明”
+- [ ] 非数字文本会按当前语义走“更正当前操作并继续执行”
 - [ ] 问题回问可用
 - [ ] 单选、多选、自由文本都符合预期
+- [ ] 后台 session 的审批 / 追问不会抢当前前台 thread
+- [ ] 切回对应 session 后，审批 / 追问能恢复显示
 
 ## D. 多模态输入
 
@@ -146,6 +165,8 @@ bun run release:build
 - [ ] 附件-only 输入会进入等待说明
 - [ ] 附件-only 状态下连续补多次附件不会丢失前面的附件
 - [ ] 附件-only 后再补一条文本能继续执行
+- [ ] 后台 session 的等待补附件提示不会主动打断当前前台 session
+- [ ] 切回对应 session 后，补附件提示会恢复显示
 - [ ] 回复里不暴露内部工具过程、缓存路径、summary 文本
 
 ## E. 长耗时与恢复
@@ -156,6 +177,7 @@ bun run release:build
 - [ ] OpenCode 短暂断连后，用户能看到恢复中提示
 - [ ] 飞书长连接短暂断连后，用户能看到恢复中提示
 - [ ] 重启服务后，活跃任务不会长期悬空
+- [ ] 后台 running task 在切走 session 后仍能正常完成或失败收尾
 
 ## 4. 发布内容检查
 

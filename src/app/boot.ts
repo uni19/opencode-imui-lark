@@ -325,6 +325,132 @@ async function dest(store: Store, row: Task | null | undefined, session_id: stri
   }
 }
 
+async function thread(store: Store, row: Pick<Task, "inbound_id"> | null | undefined) {
+  if (!row) return
+  const inbound = await store.get_inbound(row.inbound_id)
+  if (inbound?.kind !== "message") return
+  return inbound
+}
+
+async function foreground(store: Store, row: Task | null | undefined) {
+  const inbound = await thread(store, row)
+  if (!inbound || !row) return false
+  const current = await store.get_session({
+    tenant_id: inbound.tenant_id,
+    chat_id: inbound.chat_id,
+    thread_id: inbound.thread_id,
+  })
+  return current?.session_id === row.session_id
+}
+
+function visible(status?: Task["status"]) {
+  return !!status && !done(status)
+}
+
+function display(status?: OpencodeStatus, local?: Task["status"]) {
+  if (visible(local)) return local
+  return state(status)
+}
+
+async function replay_waiting(
+  store: Store,
+  task: ReturnType<typeof createTaskSvc>,
+  feishu: ReturnType<typeof createFeishuApi>,
+  render: ReturnType<typeof createRender>,
+  row: Task | null | undefined,
+  chat_id: string,
+) {
+  if (!row || !wait(row.status)) return
+
+  if (row.status === "waiting_permission" && row.req) {
+    const meta = ameta(row.note)
+    await patch(
+      store,
+      task,
+      feishu,
+      row,
+      chat_id,
+      render.approval({
+        req: row.req,
+        tool: meta?.tool || "tool",
+        detail: meta?.detail || "",
+      }),
+    )
+    return
+  }
+
+  if (row.status === "waiting_question" && row.req) {
+    const meta = qmeta(row.note)
+    await patch(
+      store,
+      task,
+      feishu,
+      row,
+      chat_id,
+      render.question({
+        req: row.req,
+        title: meta?.title || "请补充信息",
+        opts: meta?.opts ?? [],
+        custom: meta?.custom ?? true,
+      }),
+    )
+    return
+  }
+
+  if (row.status !== "waiting_attachment") return
+  const hold = await store.get_pending(row.session_id)
+  if (!hold) {
+    await task.fail({
+      id: row.id,
+      err: "等待补充说明的附件上下文已丢失，请重新发送附件和说明。",
+    })
+    await publish(
+      store,
+      task,
+      feishu,
+      row.session_id,
+      chat_id,
+      render.err({
+        text: "等待补充说明的附件上下文已丢失，请重新发送附件和说明。",
+      }),
+      undefined,
+      row,
+    )
+    return
+  }
+  if (ready(hold.assets).length !== hold.assets.length) {
+    await task.fail({
+      id: row.id,
+      err: "等待补充说明的附件缓存已失效，请重新发送附件和说明。",
+    })
+    await publish(
+      store,
+      task,
+      feishu,
+      row.session_id,
+      chat_id,
+      render.err({
+        text: "等待补充说明的附件缓存已失效，请重新发送附件和说明。",
+      }),
+      undefined,
+      row,
+    )
+    return
+  }
+  await publish(
+    store,
+    task,
+    feishu,
+    row.session_id,
+    chat_id,
+    render.progress({
+      text: holdmsg(hold.assets),
+    }),
+    undefined,
+    row,
+  )
+}
+
 async function saveout(store: Store, row: NonNullable<Awaited<ReturnType<Store["get_last_task"]>>>, msg_id: string, out: RenderOut) {
   const hit = await store.get_outbound(row.id)
   const now = Date.now()
@@ -465,6 +591,7 @@ function scope(
 function sessions(
   list: Awaited<ReturnType<ReturnType<typeof createOpencodeSvc>["sessions"]>>,
   status: Record<string, OpencodeStatus>,
+  local: Record<string, Task["status"] | undefined>,
   dir?: string,
   current?: string,
 ) {
@@ -473,7 +600,7 @@ function sessions(
     `最近会话（共 ${list.length} 条）：`,
     ...list.map((item, i) =>
       [
-        `${i + 1}. ${item.id === current ? "[当前] " : ""}[${state(status[item.id])}] ${item.title}`,
+        `${i + 1}. ${item.id === current ? "[当前] " : ""}[${display(status[item.id], local[item.id])}] ${item.title}`,
         `session: ${item.id}`,
         `目录: ${repo(item.directory, item.workspace_id)}`,
         `更新: ${time(item.updated_at)}`,
@@ -765,6 +892,7 @@ export async function sweep(
   for (const row of list) {
     const to = await dest(store, row, row.session_id)
     if (!to) continue
+    const shown = await foreground(store, row)
     const val = site(conf, row, sessions.get(row.session_id))
     const key = [val.directory ?? "", val.workspace ?? ""].join("|")
     const data = states.get(key)
@@ -793,6 +921,7 @@ export async function sweep(
         )
         continue
       }
+      if (!shown) continue
       const meta = ameta(row.note)
       await patch(
         store,
@@ -830,6 +959,7 @@ export async function sweep(
         )
         continue
       }
+      if (!shown) continue
       const meta = qmeta(row.note)
       await patch(
         store,
@@ -887,6 +1017,7 @@ export async function sweep(
         )
         continue
       }
+      if (!shown) continue
       await publish(
         store,
         task,
@@ -1260,6 +1391,7 @@ export async function recover(
   for (const row of list) {
     const to = await dest(store, row, row.session_id)
     if (!to) continue
+    const shown = await foreground(store, row)
     const val = site(conf, row, sessions.get(row.session_id))
     const scope = [val.directory ?? "", val.workspace ?? ""].join("|")
     const data = states.get(scope)
@@ -1288,6 +1420,7 @@ export async function recover(
         )
         continue
       }
+      if (!shown) continue
       const meta = ameta(row.note)
       await patch(
         store,
@@ -1325,6 +1458,7 @@ export async function recover(
         )
         continue
       }
+      if (!shown) continue
       const meta = qmeta(row.note)
       await patch(
         store,
@@ -1382,6 +1516,7 @@ export async function recover(
         )
         continue
       }
+      if (!shown) continue
       await publish(
         store,
         task,
@@ -1509,6 +1644,7 @@ export async function resume(
   for (const row of list) {
     const to = await dest(store, row, row.session_id)
     if (!to) continue
+    const shown = await foreground(store, row)
     const val = site(conf, row, sessions.get(row.session_id))
     const key = [val.directory ?? "", val.workspace ?? ""].join("|")
     const data = states.get(key)
@@ -1518,6 +1654,7 @@ export async function resume(
 
     if (row.status === "waiting_permission" && row.req) {
       if (miss) {
+        if (!shown) continue
         await publish(
           store,
           task,
@@ -1551,6 +1688,7 @@ export async function resume(
         )
         continue
       }
+      if (!shown) continue
       const meta = ameta(row.note)
       await patch(
         store,
@@ -1569,6 +1707,7 @@ export async function resume(
 
     if (row.status === "waiting_question" && row.req) {
       if (miss) {
+        if (!shown) continue
         await publish(
           store,
           task,
@@ -1602,6 +1741,7 @@ export async function resume(
         )
         continue
       }
+      if (!shown) continue
       const meta = qmeta(row.note)
       await patch(
         store,
@@ -1659,6 +1799,7 @@ export async function resume(
         )
         continue
       }
+      if (!shown) continue
       await publish(
         store,
         task,
@@ -1849,7 +1990,10 @@ export async function on_cmd(
   let last = current ? await store.get_last_task(current.session_id) : null
   const pref = await prefs(store, inbound)
   const base = scope(current, pref, conf)
-  const syncd = current && last && active(last.status) && cmd.name !== "abort" ? await probe(conf, store, task, feishu, render, opencode, last, cmd.name !== "status") : undefined
+  const syncd =
+    current && last && active(last.status) && cmd.name !== "abort" && cmd.name !== "session" && cmd.name !== "new"
+      ? await probe(conf, store, task, feishu, render, opencode, last, cmd.name !== "status")
+      : undefined
   if (last) {
     last = (await store.get_task(last.id)) ?? last
   }
@@ -1889,22 +2033,6 @@ export async function on_cmd(
               `模型：${model(current?.model ?? conf.opencode.model)}`,
               "使用 /session <session_id> 切换当前会话。",
             ].join("\n"),
-          },
-        },
-      })
-      return true
-    }
-
-    if (last && live(last.status)) {
-      await feishu.reply({
-        msg_id: inbound.message_id,
-        out: {
-          kind: "text",
-          body: {
-            text:
-              syncd === "unknown" && active(last.status)
-                ? "暂时无法确认当前执行状态，请稍候再试，或先发送 /abort 终止。"
-                : "当前有执行中的任务，暂时不能切换会话。",
           },
         },
       })
@@ -1954,24 +2082,30 @@ export async function on_cmd(
         },
       },
     })
+    await replay_waiting(store, task, feishu, render, await store.get_last_task(item.session_id), item.chat_id)
     return true
   }
 
   if (cmd.name === "sessions") {
-    const [list, status] = await Promise.all([
+    const [list, status, tasks] = await Promise.all([
       opencode.sessions({
         directory: base.directory,
         roots: true,
         limit: 8,
       }),
       opencode.status(base),
+      store.list_tasks(),
     ])
+    const local = [...latest(tasks).values()].reduce((map, row) => {
+      map[row.session_id] = row.status
+      return map
+    }, {} as Record<string, Task["status"] | undefined>)
     await feishu.reply({
       msg_id: inbound.message_id,
       out: {
         kind: "text",
         body: {
-          text: sessions(list, status, base.directory, current?.session_id),
+          text: sessions(list, status, local, base.directory, current?.session_id),
         },
       },
     })
@@ -2225,19 +2359,6 @@ export async function on_cmd(
   }
 
   if (cmd.name === "new") {
-    if (current && last && live(last.status)) {
-      if (last.status === "waiting_attachment") {
-        await store.drop_pending(current.session_id)
-        await task.abort(last.id, "已取消等待中的附件上下文，并创建新会话。")
-      } else {
-        await opencode.abort({
-          session_id: current.session_id,
-          directory: current.directory,
-          workspace: current.workspace_id,
-        })
-        await task.abort(last.id, "已中止当前执行，并创建新会话。")
-      }
-    }
     const next = await route.reset({
       tenant_id: inbound.tenant_id,
       chat_id: inbound.chat_id,
@@ -2503,6 +2624,7 @@ export async function on_event(
           detail,
         }),
       })
+      if (!(await foreground(store, row))) return
       await patch(
         store,
         task,
@@ -2545,6 +2667,7 @@ export async function on_event(
           custom,
         }),
       })
+      if (!(await foreground(store, row))) return
       await patch(
         store,
         task,
@@ -2957,7 +3080,11 @@ export async function on_msg(
     const reply = val ? permit(val) : undefined
     if (!reply) {
       if (val) {
-        await task.abort(prev.id, "已拒绝当前权限请求，并附带说明。")
+        await task.run(prev.id)
+        await task.note({
+          id: prev.id,
+          note: "已收到更正说明，正在继续执行…",
+        })
         await publish(
           store,
           task as ReturnType<typeof createTaskSvc>,
@@ -2965,7 +3092,7 @@ export async function on_msg(
           item.session_id,
           item.chat_id,
           render.progress({
-            text: "已拒绝当前权限请求，并附带你的说明。",
+            text: "已收到你的更正说明，正在继续执行…",
           }),
         )
         await opencode.allow({
@@ -2980,7 +3107,7 @@ export async function on_msg(
       await feishu.reply({
         msg_id: inbound.message_id,
         out: render.progress({
-          text: "当前在等待权限审批，请回复 1、2、3；如需拒绝并补充说明，也可以直接发送文本。",
+          text: "当前在等待权限审批，请回复 1、2、3；如果你想更正本次操作，也可以直接发送文本。",
         }),
       })
       return

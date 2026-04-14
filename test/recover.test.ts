@@ -259,6 +259,36 @@ describe("recover", () => {
     })
   })
 
+  test("keeps background waiting permission hidden during recover", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session("ses_front"))
+    await store.save_inbound(inbound("in_bg"))
+    await store.save_task({
+      ...task("tsk_bg", "ses_bg", "in_bg", "waiting_permission"),
+      req: "req_bg",
+      note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent('{"filepath":"/tmp"}')}`,
+    })
+
+    await recover(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {
+          ses_bg: { type: "busy" },
+        },
+      }),
+      "boot",
+    )
+
+    expect((await store.get_task("tsk_bg"))?.status).toBe("waiting_permission")
+    expect(ui.list).toEqual([])
+  })
+
   test("fails stale waiting question when remote session is no longer busy", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
