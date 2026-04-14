@@ -100,7 +100,12 @@ export function createMemoryStore(): Store {
 
     async list_tasks(input) {
       const all = [...tasks.values()]
-      const list = input?.status?.length ? all.filter((item) => input.status?.includes(item.status)) : all
+      const list = all.filter((item) => {
+        if (input?.status?.length && !input.status.includes(item.status)) return false
+        if (input?.session_id && item.session_id !== input.session_id) return false
+        if (input?.inbound_id && item.inbound_id !== input.inbound_id) return false
+        return true
+      })
       list.sort((a, b) => a.created_at - b.created_at)
       return list
     },
@@ -433,8 +438,12 @@ export function createSqliteStore(file: string): Store {
         const row = parse<Task>(item.data)
         return row ? [row] : []
       })
-      if (!input?.status?.length) return all
-      return all.filter((item) => input.status?.includes(item.status))
+      return all.filter((item) => {
+        if (input?.status?.length && !input.status.includes(item.status)) return false
+        if (input?.session_id && item.session_id !== input.session_id) return false
+        if (input?.inbound_id && item.inbound_id !== input.inbound_id) return false
+        return true
+      })
     },
 
     async save_inbound(input) {

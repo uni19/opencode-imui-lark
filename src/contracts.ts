@@ -389,7 +389,7 @@ export type Store = {
   get_task_by_inbound(inbound_id: string): Promise<Task | null>
   get_last_task(session_id: string): Promise<Task | null>
   get_task_by_req(req: string): Promise<Task | null>
-  list_tasks(input?: { status?: Task["status"][] }): Promise<Task[]>
+  list_tasks(input?: { status?: Task["status"][]; session_id?: string; inbound_id?: string }): Promise<Task[]>
   save_inbound(input: InboundEvent): Promise<void>
   get_inbound(id: string): Promise<InboundEvent | null>
   save_job(input: QueueJob): Promise<void>

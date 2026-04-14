@@ -185,6 +185,83 @@ describe("on_progress", () => {
     expect((await store.get_task("tsk_msg"))?.note).toBe("开始处理: build / gpt-5.4")
   })
 
+  test("suppresses message progress while a permission request is waiting at the front", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const render = createRender()
+    const push = tick()
+    const ses = session("ses_wait_perm")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_wait_perm_1"))
+    await store.save_task({
+      ...row("tsk_wait_perm_1", ses.session_id, "in_wait_perm_1", "waiting_permission"),
+      req_type: "permission",
+      req: "req_wait_perm_1",
+      note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/etc" }))}`,
+    })
+    await store.save_inbound(inbound("in_wait_perm_2"))
+    await store.save_task(row("tsk_wait_perm_2", ses.session_id, "in_wait_perm_2", "running"))
+
+    const handled = await on_progress(store, task, render, push, {
+      type: "message.part.updated",
+      properties: {
+        sessionID: ses.session_id,
+        time: 100,
+        part: {
+          id: "part_wait_perm_1",
+          sessionID: ses.session_id,
+          messageID: "msg_wait_perm_1",
+          type: "tool",
+          tool: "bash",
+          state: {
+            status: "running",
+            input: {
+              command: "ls /tmp",
+            },
+          },
+        },
+      },
+    } satisfies OpencodeEvent)
+
+    expect(handled).toBe(false)
+    expect(push.list).toEqual([])
+  })
+
+  test("suppresses assistant progress while a question request is waiting at the front", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const render = createRender()
+    const push = tick()
+    const ses = session("ses_wait_q")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_wait_q_1"))
+    await store.save_task({
+      ...row("tsk_wait_q_1", ses.session_id, "in_wait_q_1", "waiting_question"),
+      req_type: "question",
+      req: "req_wait_q_1",
+      note: `question:0:${encodeURIComponent("先选目录")}:${encodeURIComponent("/etc")}|${encodeURIComponent("/tmp")}`,
+    })
+    await store.save_inbound(inbound("in_wait_q_2"))
+    await store.save_task(row("tsk_wait_q_2", ses.session_id, "in_wait_q_2", "running"))
+
+    const handled = await on_progress(store, task, render, push, {
+      type: "message.updated",
+      properties: {
+        sessionID: ses.session_id,
+        info: {
+          id: "msg_assistant_wait_q",
+          sessionID: ses.session_id,
+          role: "assistant",
+          agent: "build",
+          modelID: "gpt-5.4",
+        },
+      },
+    } satisfies OpencodeEvent)
+
+    expect(handled).toBe(false)
+    expect(push.list).toEqual([])
+  })
+
   test("dedups repeated message.part.updated with same time", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)

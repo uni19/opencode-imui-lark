@@ -265,6 +265,90 @@ function ready(assets: InboundMessage["assets"]) {
   return assets.filter((item): item is typeof item & { url: string; mime: string; name: string } => !!item.url && !!item.mime && !!item.name)
 }
 
+
+// 只有 permission / question 需要走“前台串行卡片”队列。
+function waiting_status(status: Task["status"]) {
+  return status === "waiting_permission" || status === "waiting_question"
+}
+
+async function waiting_requests(store: Store, session_id: string) {
+  return store.list_tasks({
+    session_id,
+    status: ["waiting_permission", "waiting_question"],
+  })
+}
+
+// 同一 session 里，永远只允许队头 waiting request 对外可见。
+async function next_waiting_request(store: Store, session_id: string) {
+  return (await waiting_requests(store, session_id))[0] ?? null
+}
+
+async function visible_task(store: Store, session_id: string) {
+  return (await next_waiting_request(store, session_id)) ?? store.get_last_task(session_id)
+}
+
+// 一个 prompt 可能连续触发多次 permission/question。
+// 新 req 不能覆盖前一个 waiting task；必要时要克隆出新的 task 来承载后续请求。
+async function claim_waiting_task(store: Store, task: ReturnType<typeof createTaskSvc>, session_id: string, req: string) {
+  const hit = await store.get_task_by_req(req)
+  if (hit) return hit
+  const list = await store.list_tasks({ session_id })
+  const pending = [...list].reverse().find((item) => !done(item.status) && !waiting_status(item.status) && !item.req)
+  if (pending) return pending
+  const base = [...list].reverse().find((item) => !done(item.status)) ?? null
+  if (!base) return null
+  const row = await task.add({
+    im_session_id: base.im_session_id,
+    session_id: base.session_id,
+    inbound_id: base.inbound_id,
+    directory: base.directory,
+    workspace_id: base.workspace_id,
+  })
+  await task.run(row.id)
+  return (await store.get_task(row.id)) ?? row
+}
+
+function request_out(render: Render, row: Pick<Task, "status" | "req" | "note">) {
+  if (!row.req) return
+  if (row.status === "waiting_permission") {
+    const meta = ameta(row.note)
+    return render.approval({
+      req: row.req,
+      tool: meta?.tool || "tool",
+      detail: meta?.detail || "",
+    })
+  }
+  if (row.status === "waiting_question") {
+    const meta = qmeta(row.note)
+    return render.question({
+      req: row.req,
+      title: meta?.title || "请补充信息",
+      opts: meta?.opts ?? [],
+      custom: meta?.custom ?? true,
+    })
+  }
+}
+
+async function flush_next_request(
+  store: Store,
+  task: ReturnType<typeof createTaskSvc>,
+  feishu: ReturnType<typeof createFeishuApi>,
+  render: ReturnType<typeof createRender>,
+  session_id: string,
+  chat_id: string,
+) {
+  const next = await next_waiting_request(store, session_id)
+  if (!next) return
+  if (!(await foreground(store, next))) return
+  const out = request_out(render, next)
+  if (!out) return
+  if (next.outbound_id) {
+    await patch(store, task, feishu, next, chat_id, out)
+    return
+  }
+  await deliver(store, task, feishu, next, chat_id, out)
+}
+
 function site(
   conf: AppCfg,
   row?: Pick<Task, "directory" | "workspace_id"> | null,
@@ -360,6 +444,10 @@ async function replay_waiting(
   row: Task | null | undefined,
   chat_id: string,
 ) {
+  if (row?.req) {
+    const front = await next_waiting_request(store, row.session_id)
+    if (front && front.id !== row.id) return
+  }
   if (!row || !wait(row.status)) return
 
   if (row.status === "waiting_permission" && row.req) {
@@ -922,6 +1010,8 @@ export async function sweep(
         continue
       }
       if (!shown) continue
+      const front = await next_waiting_request(store, row.session_id)
+      if (front?.id !== row.id) continue
       const meta = ameta(row.note)
       await patch(
         store,
@@ -960,6 +1050,8 @@ export async function sweep(
         continue
       }
       if (!shown) continue
+      const front = await next_waiting_request(store, row.session_id)
+      if (front?.id !== row.id) continue
       const meta = qmeta(row.note)
       await patch(
         store,
@@ -1421,6 +1513,8 @@ export async function recover(
         continue
       }
       if (!shown) continue
+      const front = await next_waiting_request(store, row.session_id)
+      if (front?.id !== row.id) continue
       const meta = ameta(row.note)
       await patch(
         store,
@@ -1459,6 +1553,8 @@ export async function recover(
         continue
       }
       if (!shown) continue
+      const front = await next_waiting_request(store, row.session_id)
+      if (front?.id !== row.id) continue
       const meta = qmeta(row.note)
       await patch(
         store,
@@ -1689,6 +1785,8 @@ export async function resume(
         continue
       }
       if (!shown) continue
+      const front = await next_waiting_request(store, row.session_id)
+      if (front?.id !== row.id) continue
       const meta = ameta(row.note)
       await patch(
         store,
@@ -1742,6 +1840,8 @@ export async function resume(
         continue
       }
       if (!shown) continue
+      const front = await next_waiting_request(store, row.session_id)
+      if (front?.id !== row.id) continue
       const meta = qmeta(row.note)
       await patch(
         store,
@@ -2605,7 +2705,7 @@ export async function on_event(
   if (event.type === "permission.asked") {
     const session_id = String(event.properties.sessionID ?? "")
     const req = String(event.properties.id ?? "")
-    const row = (await store.get_task_by_req(req)) ?? (await store.get_last_task(session_id))
+    const row = await claim_waiting_task(store, task, session_id, req)
     if (!row || done(row.status)) return
     const to = await dest(store, row, session_id)
     if (!to) return
@@ -2624,6 +2724,8 @@ export async function on_event(
           detail,
         }),
       })
+      const queue = await waiting_requests(store, session_id)
+      if (queue[0]?.id !== row.id) return
       if (!(await foreground(store, row))) return
       await patch(
         store,
@@ -2644,7 +2746,7 @@ export async function on_event(
   if (event.type === "question.asked") {
     const session_id = String(event.properties.sessionID ?? "")
     const req = String(event.properties.id ?? "")
-    const row = (await store.get_task_by_req(req)) ?? (await store.get_last_task(session_id))
+    const row = await claim_waiting_task(store, task, session_id, req)
     if (!row || done(row.status)) return
     const to = await dest(store, row, session_id)
     if (!to) return
@@ -2667,6 +2769,8 @@ export async function on_event(
           custom,
         }),
       })
+      const queue = await waiting_requests(store, session_id)
+      if (queue[0]?.id !== row.id) return
       if (!(await foreground(store, row))) return
       await patch(
         store,
@@ -2762,7 +2866,7 @@ export async function on_progress(
 ) {
   if (event.type === "session.status") {
     const session_id = String(event.properties.sessionID ?? "")
-    const row = session_id ? await store.get_last_task(session_id) : null
+    const row = session_id ? await visible_task(store, session_id) : null
     if (row?.status === "aborted") return false
     if (wait(row?.status)) return false
     if (row && !active(row.status)) return false
@@ -2813,7 +2917,7 @@ export async function on_progress(
 
   if (event.type === "message.updated") {
     const session_id = String(event.properties.sessionID ?? "")
-    const row = session_id ? await store.get_last_task(session_id) : null
+    const row = session_id ? await visible_task(store, session_id) : null
     if (row?.status === "aborted") return false
     if (wait(row?.status)) return false
     if (!row || !active(row.status)) return false
@@ -2841,7 +2945,7 @@ export async function on_progress(
 
   if (event.type === "message.part.updated") {
     const session_id = String(event.properties.sessionID ?? "")
-    const row = session_id ? await store.get_last_task(session_id) : null
+    const row = session_id ? await visible_task(store, session_id) : null
     if (row?.status === "aborted") return false
     if (wait(row?.status)) return false
     if (!row || !active(row.status)) return false
@@ -2948,6 +3052,8 @@ export async function on_msg(
   })
   let prev = current ? last : await store.get_last_task(item.session_id)
   const hold = current ? pend : await store.get_pending(item.session_id)
+  const front = await next_waiting_request(store, item.session_id)
+  if (front) prev = front
   const syncd = prev && active(prev.status) ? await probe(conf, store, task as ReturnType<typeof createTaskSvc>, feishu as ReturnType<typeof createFeishuApi>, render as ReturnType<typeof createRender>, opencode as ReturnType<typeof createOpencodeSvc>, prev, true) : undefined
   if (prev) {
     prev = (await store.get_task(prev.id)) ?? prev
@@ -3066,6 +3172,8 @@ export async function on_msg(
       render.progress({
         text: "已提交补充信息",
       }),
+      undefined,
+      prev,
     )
     await opencode.answer({
       req: prev.req,
@@ -3073,6 +3181,14 @@ export async function on_msg(
       directory: item.directory,
       workspace: item.workspace_id,
     })
+    await flush_next_request(
+      store,
+      task as ReturnType<typeof createTaskSvc>,
+      feishu as ReturnType<typeof createFeishuApi>,
+      render as ReturnType<typeof createRender>,
+      item.session_id,
+      item.chat_id,
+    )
     return
   }
 
@@ -3094,6 +3210,8 @@ export async function on_msg(
           render.progress({
             text: "已收到你的更正说明，正在继续执行…",
           }),
+          undefined,
+          prev,
         )
         await opencode.allow({
           req: prev.req,
@@ -3102,6 +3220,14 @@ export async function on_msg(
           directory: item.directory,
           workspace: item.workspace_id,
         })
+        await flush_next_request(
+          store,
+          task as ReturnType<typeof createTaskSvc>,
+          feishu as ReturnType<typeof createFeishuApi>,
+          render as ReturnType<typeof createRender>,
+          item.session_id,
+          item.chat_id,
+        )
         return
       }
       await feishu.reply({
@@ -3127,6 +3253,8 @@ export async function on_msg(
         text:
           reply === "always" ? "已始终允许，正在继续执行…" : reply === "reject" ? "已拒绝当前权限请求。" : "已允许一次，正在继续执行…",
       }),
+      undefined,
+      prev,
     )
     await opencode.allow({
       req: prev.req,
@@ -3134,6 +3262,14 @@ export async function on_msg(
       directory: item.directory,
       workspace: item.workspace_id,
     })
+    await flush_next_request(
+      store,
+      task as ReturnType<typeof createTaskSvc>,
+      feishu as ReturnType<typeof createFeishuApi>,
+      render as ReturnType<typeof createRender>,
+      item.session_id,
+      item.chat_id,
+    )
     return
   }
 

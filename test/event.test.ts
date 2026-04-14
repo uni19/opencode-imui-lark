@@ -337,6 +337,152 @@ describe("on_event", () => {
     ])
   })
 
+  test("queues later permission event and only surfaces it after current one is handled", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ses = session("ses_perm_queue")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_perm_queue_1"))
+    await store.save_task(row("tsk_perm_queue_1", ses.session_id, "in_perm_queue_1"))
+
+    await on_event(store, task, ui.api, render, opencode(), {
+      type: "permission.asked",
+      properties: {
+        sessionID: ses.session_id,
+        id: "req_perm_queue_1",
+        permission: "external_directory",
+        metadata: { filepath: "/tmp" },
+      },
+    } satisfies OpencodeEvent)
+
+    await store.save_inbound(inbound("in_perm_queue_2"))
+    await store.save_task(row("tsk_perm_queue_2", ses.session_id, "in_perm_queue_2", "running"))
+
+    await on_event(store, task, ui.api, render, opencode(), {
+      type: "permission.asked",
+      properties: {
+        sessionID: ses.session_id,
+        id: "req_perm_queue_2",
+        permission: "external_directory",
+        metadata: { filepath: "/usr" },
+      },
+    } satisfies OpencodeEvent)
+
+    expect((await store.get_task("tsk_perm_queue_2"))?.status).toBe("waiting_permission")
+    expect(ui.list).toHaveLength(1)
+  })
+
+  test("queues later question event and only surfaces it after current one is handled", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ses = session("ses_q_queue")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_q_queue_1"))
+    await store.save_task(row("tsk_q_queue_1", ses.session_id, "in_q_queue_1"))
+
+    await on_event(store, task, ui.api, render, opencode(), {
+      type: "question.asked",
+      properties: {
+        sessionID: ses.session_id,
+        id: "req_q_queue_1",
+        questions: [{ question: "第一个问题", custom: false, options: [{ label: "A" }, { label: "B" }] }],
+      },
+    } satisfies OpencodeEvent)
+
+    await store.save_inbound(inbound("in_q_queue_2"))
+    await store.save_task(row("tsk_q_queue_2", ses.session_id, "in_q_queue_2", "running"))
+
+    await on_event(store, task, ui.api, render, opencode(), {
+      type: "question.asked",
+      properties: {
+        sessionID: ses.session_id,
+        id: "req_q_queue_2",
+        questions: [{ question: "第二个问题", custom: false, options: [{ label: "X" }, { label: "Y" }] }],
+      },
+    } satisfies OpencodeEvent)
+
+    expect((await store.get_task("tsk_q_queue_2"))?.status).toBe("waiting_question")
+    expect(ui.list).toHaveLength(1)
+  })
+
+  // 复现真实问题：同一个 prompt 连续触发两次权限请求时，后一个 req 不能覆盖前一个 task。
+  test("keeps multiple permission requests from one task in separate queued tasks", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ses = session("ses_perm_same_task")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_perm_same_task"))
+    await store.save_task(row("tsk_perm_same_task", ses.session_id, "in_perm_same_task"))
+
+    await on_event(store, task, ui.api, render, opencode(), {
+      type: "permission.asked",
+      properties: {
+        sessionID: ses.session_id,
+        id: "req_perm_same_task_1",
+        permission: "external_directory",
+        metadata: { filepath: "/tmp" },
+      },
+    } satisfies OpencodeEvent)
+
+    await on_event(store, task, ui.api, render, opencode(), {
+      type: "permission.asked",
+      properties: {
+        sessionID: ses.session_id,
+        id: "req_perm_same_task_2",
+        permission: "external_directory",
+        metadata: { filepath: "/etc" },
+      },
+    } satisfies OpencodeEvent)
+
+    const list = await store.list_tasks({ session_id: ses.session_id })
+    expect(list).toHaveLength(2)
+    expect(list.map((item) => item.req)).toEqual(["req_perm_same_task_1", "req_perm_same_task_2"])
+    expect(list.map((item) => item.status)).toEqual(["waiting_permission", "waiting_permission"])
+    expect(ui.list).toHaveLength(1)
+  })
+
+  // question.asked 也必须保留成独立排队项，不能把同一个 task 上的 req 覆盖掉。
+  test("keeps multiple question requests from one task in separate queued tasks", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ses = session("ses_q_same_task")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_q_same_task"))
+    await store.save_task(row("tsk_q_same_task", ses.session_id, "in_q_same_task"))
+
+    await on_event(store, task, ui.api, render, opencode(), {
+      type: "question.asked",
+      properties: {
+        sessionID: ses.session_id,
+        id: "req_q_same_task_1",
+        questions: [{ question: "第一个问题", custom: false, options: [{ label: "A" }] }],
+      },
+    } satisfies OpencodeEvent)
+
+    await on_event(store, task, ui.api, render, opencode(), {
+      type: "question.asked",
+      properties: {
+        sessionID: ses.session_id,
+        id: "req_q_same_task_2",
+        questions: [{ question: "第二个问题", custom: true, options: [{ label: "B" }] }],
+      },
+    } satisfies OpencodeEvent)
+
+    const list = await store.list_tasks({ session_id: ses.session_id })
+    expect(list).toHaveLength(2)
+    expect(list.map((item) => item.req)).toEqual(["req_q_same_task_1", "req_q_same_task_2"])
+    expect(list.map((item) => item.status)).toEqual(["waiting_question", "waiting_question"])
+    expect(ui.list).toHaveLength(1)
+  })
+
   test("allows updated question event with same req to patch card", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)

@@ -2447,6 +2447,149 @@ describe("commands", () => {
     })
   })
 
+  test("answering current waiting question automatically surfaces the next queued question", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        id: "tsk_q_1",
+        inbound_id: "in_q_1",
+        status: "waiting_question",
+        req_type: "question",
+        req: "req_q_1",
+        note: `question:0:${encodeURIComponent("第一个问题")}:${encodeURIComponent("A")}|${encodeURIComponent("B")}`,
+        outbound_id: "out_q_1",
+      }),
+    )
+    await store.save_inbound(inbound({ id: "in_q_2", event_id: "evt_q_2", message_id: "msg_q_2" }))
+    await store.save_task(
+      row({
+        id: "tsk_q_2",
+        inbound_id: "in_q_2",
+        created_at: 2,
+        updated_at: 2,
+        status: "waiting_question",
+        req_type: "question",
+        req: "req_q_2",
+        note: `question:0:${encodeURIComponent("第二个问题")}:${encodeURIComponent("X")}|${encodeURIComponent("Y")}`,
+      }),
+    )
+    const calls: Array<{ req: string; answers: string[][] }> = []
+    const oc = {
+      ...opencode(),
+      async answer(input) {
+        calls.push({ req: input.req, answers: input.answers })
+      },
+    } satisfies OpencodeSvc
+
+    await on_msg(
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({
+        id: "in_q_answer",
+        event_id: "evt_q_answer",
+        message_id: "msg_q_answer",
+        text: "1",
+      }),
+    )
+
+    expect(calls).toEqual([{ req: "req_q_1", answers: [["A"]] }])
+    expect((await store.get_task("tsk_q_1"))?.status).toBe("running")
+    expect((await store.get_task("tsk_q_2"))?.status).toBe("waiting_question")
+    expect(
+      ui.list.some((item) =>
+        item.out.kind === "card" &&
+        !!item.out.body &&
+        typeof item.out.body === "object" &&
+        "type" in item.out.body &&
+        (item.out.body as { type?: string; req?: string }).type === "question" &&
+        (item.out.body as { type?: string; req?: string }).req === "req_q_2",
+      ),
+    ).toBe(true)
+  })
+
+  // 用户处理完第一张权限卡后，飞书里应该继续出现下一张，而不是卡死在第一张之后。
+  test("answering current waiting permission automatically surfaces the next queued approval", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        id: "tsk_perm_1",
+        inbound_id: "in_perm_1",
+        status: "waiting_permission",
+        req_type: "permission",
+        req: "req_perm_1",
+        note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/tmp" }))}`,
+        outbound_id: "out_perm_1",
+      }),
+    )
+    await store.save_inbound(inbound({ id: "in_perm_2", event_id: "evt_perm_2", message_id: "msg_perm_2" }))
+    await store.save_task(
+      row({
+        id: "tsk_perm_2",
+        inbound_id: "in_perm_2",
+        created_at: 2,
+        updated_at: 2,
+        status: "waiting_permission",
+        req_type: "permission",
+        req: "req_perm_2",
+        note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/usr" }))}`,
+      }),
+    )
+    const calls: Array<{ req: string; reply: "once" | "always" | "reject" }> = []
+    const oc = {
+      ...opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      async allow(input) {
+        calls.push({ req: input.req, reply: input.reply })
+      },
+    } satisfies OpencodeSvc
+
+    await on_msg(
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({
+        id: "in_perm_answer",
+        event_id: "evt_perm_answer",
+        message_id: "msg_perm_answer",
+        text: "1",
+      }),
+    )
+
+    expect(calls).toEqual([{ req: "req_perm_1", reply: "once" }])
+    expect((await store.get_task("tsk_perm_1"))?.status).toBe("running")
+    expect((await store.get_task("tsk_perm_2"))?.status).toBe("waiting_permission")
+    expect(
+      ui.list.some((item) =>
+        item.out.kind === "card" &&
+        !!item.out.body &&
+        typeof item.out.body === "object" &&
+        "type" in item.out.body &&
+        (item.out.body as { type?: string; req?: string }).type === "approval" &&
+        (item.out.body as { type?: string; req?: string }).req === "req_perm_2",
+      ),
+    ).toBe(true)
+  })
+
   test("waiting_question accepts direct text answer when custom reply is allowed", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
@@ -2573,4 +2716,73 @@ describe("commands", () => {
       },
     })
   })
+})
+
+// 第二张权限卡如果还没有 outbound_id，必须新发消息，不能错误 patch 到第一张卡上。
+test("next queued approval is sent as a new message when it has no outbound yet", async () => {
+  const store = createMemoryStore()
+  const svc = createTaskSvc(store)
+  const ui = feishu()
+  await store.save_session(session())
+  await store.save_inbound(inbound())
+  await store.save_task(
+    row({
+      id: "tsk_perm_chain_1",
+      inbound_id: "in_perm_chain_1",
+      status: "waiting_permission",
+      req_type: "permission",
+      req: "req_perm_chain_1",
+      note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/tmp" }))}`,
+      outbound_id: "out_perm_chain_1",
+    }),
+  )
+  await store.save_inbound(inbound({ id: "in_perm_chain_2", event_id: "evt_perm_chain_2", message_id: "msg_perm_chain_2" }))
+  await store.save_task(
+    row({
+      id: "tsk_perm_chain_2",
+      inbound_id: "in_perm_chain_2",
+      created_at: 2,
+      updated_at: 2,
+      status: "waiting_permission",
+      req_type: "permission",
+      req: "req_perm_chain_2",
+      note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/etc" }))}`,
+    }),
+  )
+  const oc = {
+    ...opencode({
+      status: {
+        ses_1: { type: "busy" },
+      },
+    }),
+    async allow() {},
+  } satisfies OpencodeSvc
+
+  await on_msg(
+    cfg(),
+    route(),
+    svc,
+    store,
+    ui.api,
+    createRender(),
+    oc,
+    inbound({
+      id: "in_perm_chain_answer",
+      event_id: "evt_perm_chain_answer",
+      message_id: "msg_perm_chain_answer",
+      text: "1",
+    }),
+  )
+
+  expect(ui.list.at(-1)).toMatchObject({
+    kind: "reply",
+    out: {
+      kind: "card",
+      body: {
+        type: "approval",
+        req: "req_perm_chain_2",
+      },
+    },
+  })
+  expect((await store.get_task("tsk_perm_chain_2"))?.outbound_id).toBeTruthy()
 })
