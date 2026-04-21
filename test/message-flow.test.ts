@@ -1,6 +1,7 @@
+/// <reference types="bun-types" />
 import { describe, expect, test } from "bun:test"
 import { holdmsg, on_msg } from "../src/app/boot.ts"
-import type { AppCfg, FeishuApi, InboundMessage, OpencodeSvc, RenderOut } from "../src/contracts.ts"
+import type { AppCfg, FeishuApi, InboundMessage, OpencodeStatus, OpencodeSvc, RenderOut } from "../src/contracts.ts"
 import { createSessionSvc } from "../src/gateway/session.ts"
 import { createTaskSvc } from "../src/gateway/task.ts"
 import { createRender } from "../src/render/text.ts"
@@ -15,6 +16,7 @@ function cfg() {
       base_url: "http://127.0.0.1:4096",
       username: "opencode",
       directory: "/tmp",
+      workspace: undefined,
       model: {
         providerID: "openai",
         modelID: "gpt-5.4",
@@ -96,7 +98,7 @@ function opencode() {
       async sessions() {
         return []
       },
-      async status() {
+      async status(_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> {
         return {}
       },
       async commands() {
@@ -126,7 +128,7 @@ function opencode() {
       async command() {
         return undefined
       },
-      async last() {
+      async last(_input: { session_id: string; directory?: string; workspace?: string }): Promise<string | undefined> {
         return undefined
       },
     } satisfies OpencodeSvc,
@@ -171,8 +173,9 @@ describe("message flow", () => {
     )
 
     const row = await store.get_last_task("ses_1")
-    expect(row?.status).toBe("waiting_attachment")
-    expect(await store.get_pending("ses_1")).toMatchObject({
+    if (!row) throw new Error("missing task row")
+    expect(row.status).toBe("waiting_attachment")
+    expect(await store.get_task_pending(row.id)).toMatchObject({
       assets: [
         {
           kind: "image",
@@ -210,7 +213,7 @@ describe("message flow", () => {
     )
 
     expect((await store.get_last_task("ses_1"))?.note).toBe("等待补充说明，已累计 1 张图片，1 个文件")
-    expect(await store.get_pending("ses_1")).toMatchObject({
+    expect(await store.get_task_pending(row.id)).toMatchObject({
       assets: [
         {
           kind: "image",
@@ -245,7 +248,7 @@ describe("message flow", () => {
       }),
     )
 
-    expect(await store.get_pending("ses_1")).toBeNull()
+    expect(await store.get_task_pending(row.id)).toBeNull()
     expect((await store.get_last_task("ses_1"))?.status).toBe("running")
     expect(ui.list[2]).toMatchObject({
       kind: "patch",
@@ -280,6 +283,170 @@ describe("message flow", () => {
       type: "file",
       filename: "report.pdf",
       mime: "application/pdf",
+    })
+    const history = await store.list_assistant_outbounds(row.id)
+    expect(history.map((item) => item.kind)).toEqual(["attachment", "attachment", "progress"])
+    expect(history.map((item) => item.action)).toEqual(["reply", "patch", "patch"])
+    expect(history.every((item) => item.state === "emitted")).toBe(true)
+  })
+
+  test("hands off resumable follow-up to a fresh session", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+    let statuses: Record<string, OpencodeStatus> = {}
+    let last: string | undefined
+    ai.svc.status = async (_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> => statuses
+    ai.svc.last = async (_input: { session_id: string; directory?: string; workspace?: string }): Promise<string | undefined> => last
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_resume_1", {
+        text: "先做第一步分析",
+      }),
+    )
+
+    const first = await store.get_task_by_inbound("in_resume_1")
+    if (!first) throw new Error("missing first task")
+    expect(first.status).toBe("running")
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]?.session_id).toBe("ses_1")
+
+    statuses = {
+      ses_1: { type: "idle" },
+    }
+    last = "阶段性答案"
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_resume_2", {
+        text: "继续往下做",
+      }),
+    )
+
+    const resumed = await store.get_task_by_inbound("in_resume_1")
+    const next = await store.get_task_by_inbound("in_resume_2")
+    if (!resumed || !next) throw new Error("missing handoff tasks")
+    expect(resumed).toMatchObject({
+      id: first.id,
+      status: "running",
+      superseded_by_task_id: next.id,
+    })
+    expect(resumed.terminal_kind).toBeUndefined()
+    expect(typeof resumed.result_hash).toBe("string")
+    expect(next).toMatchObject({
+      status: "running",
+      session_id: "ses_2",
+    })
+    expect(
+      await store.get_session({
+        tenant_id: "tenant",
+        chat_id: "chat",
+        thread_id: undefined,
+      }),
+    ).toMatchObject({
+      session_id: "ses_2",
+    })
+    expect(ai.prompts).toHaveLength(2)
+    expect(ai.prompts.map((item) => item.session_id)).toEqual(["ses_1", "ses_2"])
+    expect(ai.aborts).toHaveLength(0)
+    expect(ui.list).toContainEqual({
+      kind: "reply",
+      out: render.intermediate({ text: "阶段性答案" }),
+    })
+  })
+
+  test("clears pending when attachment follow-up prompt submission fails", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_fail_1", {
+        assets: [
+          {
+            kind: "image",
+            key: "img_fail_1",
+            name: "broken.png",
+          },
+        ],
+      }),
+    )
+
+    const waiting = await store.get_last_task("ses_1")
+    if (!waiting) throw new Error("missing waiting task")
+    ai.svc.prompt = async () => {
+      throw new Error("prompt failed")
+    }
+
+    let err: unknown
+    try {
+      await on_msg(
+        conf,
+        route,
+        task,
+        store,
+        ui.api,
+        render,
+        ai.svc,
+        inbound("in_fail_2", {
+          text: "请继续处理这张图",
+        }),
+      )
+    } catch (caught) {
+      err = caught
+    }
+
+    expect((err as Error | undefined)?.message).toBe("prompt failed")
+    expect((await store.get_task(waiting.id))?.status).toBe("failed")
+    expect(await store.get_task_pending(waiting.id)).toBeNull()
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          template: "red",
+        },
+      },
     })
   })
 
@@ -329,10 +496,12 @@ describe("message flow", () => {
       }),
     )
 
-    expect((await store.get_last_task("ses_1"))?.status).toBe("waiting_attachment")
-    expect(await store.get_pending("ses_1")).not.toBeNull()
+    const waiting = await store.get_last_task("ses_1")
+    if (!waiting) throw new Error("missing waiting task")
+    expect(waiting.status).toBe("waiting_attachment")
+    expect(await store.get_task_pending(waiting.id)).not.toBeNull()
     expect(ai.prompts).toHaveLength(0)
-    expect(ui.list.at(-1)).toMatchObject({
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
       kind: "reply",
       out: {
         kind: "card",
@@ -390,12 +559,14 @@ describe("message flow", () => {
       }),
     )
 
-    expect((await store.get_last_task("ses_1"))?.status).toBe("aborted")
-    expect((await store.get_last_task("ses_1"))?.note).toBe("已取消等待中的附件上下文。")
-    expect(await store.get_pending("ses_1")).toBeNull()
+    const aborted = await store.get_last_task("ses_1")
+    if (!aborted) throw new Error("missing aborted task")
+    expect(aborted.status).toBe("aborted")
+    expect(aborted.note).toBe("已取消等待中的附件上下文。")
+    expect(await store.get_task_pending(aborted.id)).toBeNull()
     expect(ai.prompts).toHaveLength(0)
     expect(ai.aborts).toHaveLength(0)
-    expect(ui.list.at(-1)).toMatchObject({
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
       kind: "reply",
       out: {
         kind: "text",
@@ -452,8 +623,10 @@ describe("message flow", () => {
       }),
     )
 
-    expect((await store.get_task_by_inbound("in_new_1"))?.status).toBe("waiting_attachment")
-    expect(await store.get_pending("ses_1")).not.toBeNull()
+    const original = await store.get_task_by_inbound("in_new_1")
+    if (!original) throw new Error("missing original waiting task")
+    expect(original.status).toBe("waiting_attachment")
+    expect(await store.get_task_pending(original.id)).not.toBeNull()
     expect(ai.aborts).toHaveLength(0)
     expect(
       await store.get_session({
@@ -465,7 +638,7 @@ describe("message flow", () => {
       session_id: "ses_2",
       directory: "/tmp",
     })
-    expect(ui.list.at(-1)).toMatchObject({
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
       kind: "reply",
       out: {
         kind: "text",
@@ -488,7 +661,7 @@ describe("message flow", () => {
       }),
     )
 
-    expect(ui.list.at(-2)).toMatchObject({
+    expect(ui.list[ui.list.length - 2]).toMatchObject({
       kind: "reply",
       out: {
         kind: "text",
@@ -497,7 +670,7 @@ describe("message flow", () => {
         },
       },
     })
-    expect(ui.list.at(-1)).toMatchObject({
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
       kind: "patch",
       out: {
         kind: "card",
@@ -646,16 +819,18 @@ describe("message flow", () => {
       }),
     )
 
-    expect((await store.get_last_task("ses_1"))?.status).toBe("waiting_attachment")
-    expect((await store.get_last_task("ses_1"))?.note).toBe("等待补充说明，已累计 1 张图片，2 个文件")
-    expect(await store.get_pending("ses_1")).toMatchObject({
+    const latest = await store.get_last_task("ses_1")
+    if (!latest) throw new Error("missing accumulated task")
+    expect(latest.status).toBe("waiting_attachment")
+    expect(latest.note).toBe("等待补充说明，已累计 1 张图片，2 个文件")
+    expect(await store.get_task_pending(latest.id)).toMatchObject({
       assets: [
         { kind: "file", key: "file_1" },
         { kind: "image", key: "img_1" },
         { kind: "file", key: "file_2" },
       ],
     })
-    expect(ui.list.at(-1)).toMatchObject({
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
       kind: "patch",
       out: {
         kind: "card",
@@ -665,6 +840,9 @@ describe("message flow", () => {
       },
     })
     expect(ai.prompts).toHaveLength(0)
+    const history = await store.list_assistant_outbounds(latest.id)
+    expect(history.map((item) => item.kind)).toEqual(["attachment", "attachment", "attachment"])
+    expect(history.map((item) => item.action)).toEqual(["reply", "patch", "patch"])
   })
 
   test("submits all accumulated files and images after repeated attachment-only turns", async () => {
@@ -733,7 +911,10 @@ describe("message flow", () => {
       }),
     )
 
-    expect(await store.get_pending("ses_1")).toBeNull()
+    const waiting = await store.get_last_task("ses_1")
+    if (!waiting) throw new Error("missing waiting task")
+
+    expect(await store.get_task_pending(waiting.id)).toBeNull()
     expect(ai.prompts).toHaveLength(1)
     expect(ai.prompts[0]?.parts).toHaveLength(3)
     expect((ai.prompts[0]?.parts?.[0] as { text?: string } | undefined)?.text).toContain("附件概览：1 张图片，1 个文件")

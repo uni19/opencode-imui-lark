@@ -1,6 +1,7 @@
+/// <reference types="bun-types" />
 import { describe, expect, test } from "bun:test"
 import { recover } from "../src/app/boot.ts"
-import type { AppCfg, FeishuApi, ImSession, InboundMessage, OpencodeSvc, RenderOut, Task } from "../src/contracts.ts"
+import type { AppCfg, FeishuApi, ImSession, InboundMessage, OpencodeResult, OpencodeStatus, OpencodeSvc, RenderOut, Task } from "../src/contracts.ts"
 import { createRender } from "../src/render/text.ts"
 import { createMemoryStore } from "../src/storage/db.ts"
 import { createTaskSvc } from "../src/gateway/task.ts"
@@ -90,7 +91,7 @@ function feishu() {
   }
 }
 
-function opencode(input: { status?: Record<string, unknown> | null; last?: string | undefined }) {
+function opencode(input: { status?: Record<string, OpencodeStatus> | null; last?: string | undefined; result?: OpencodeResult }) {
   return {
     async ensure() {
       return { id: "ses_1" }
@@ -101,7 +102,7 @@ function opencode(input: { status?: Record<string, unknown> | null; last?: strin
     async sessions() {
       return []
     },
-    async status() {
+    async status(_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> {
       if (input.status === null) throw new Error("status failed")
       return input.status ?? {}
     },
@@ -128,8 +129,11 @@ function opencode(input: { status?: Record<string, unknown> | null; last?: strin
     async command() {
       return undefined
     },
-    async last() {
+    async last(_input: { session_id: string; directory?: string; workspace?: string }): Promise<string | undefined> {
       return input.last
+    },
+    async result(_input: { session_id: string; directory?: string; workspace?: string }): Promise<OpencodeResult> {
+      return input.result ?? (input.last ? { state: "ok", text: input.last } : { state: "empty" })
     },
   } satisfies OpencodeSvc
 }
@@ -147,7 +151,8 @@ describe("recover", () => {
     await recover(cfg(), store, svc, ui.api, createRender(), opencode({}), "boot")
 
     expect((await store.get_task("tsk_1"))?.status).toBe("failed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(await store.get_task_pending("tsk_1")).toBeNull()
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "red",
@@ -163,9 +168,11 @@ describe("recover", () => {
     await store.save_session(ses)
     await store.save_inbound(inbound("in_bad"))
     await store.save_task(task("tsk_bad", ses.session_id, "in_bad", "waiting_attachment"))
-    await store.save_pending({
+    await store.save_task_pending({
+      task_id: "tsk_bad",
       session_id: ses.session_id,
-      inbound_id: "in_bad",
+      origin_inbound_id: "in_bad",
+      origin_message_id: "msg_in_bad",
       assets: [
         {
           kind: "image",
@@ -180,7 +187,8 @@ describe("recover", () => {
     await recover(cfg(), store, svc, ui.api, createRender(), opencode({}), "boot")
 
     expect((await store.get_task("tsk_bad"))?.status).toBe("failed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(await store.get_task_pending("tsk_bad")).toBeNull()
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "red",
@@ -213,7 +221,7 @@ describe("recover", () => {
     )
 
     expect((await store.get_task("tsk_2"))?.status).toBe("running")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
@@ -249,7 +257,7 @@ describe("recover", () => {
     )
 
     expect((await store.get_task("tsk_4"))?.status).toBe("waiting_permission")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         type: "approval",
@@ -305,7 +313,7 @@ describe("recover", () => {
     await recover(cfg(), store, svc, ui.api, createRender(), opencode({}), "boot")
 
     expect((await store.get_task("tsk_5"))?.status).toBe("failed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "red",
@@ -329,7 +337,7 @@ describe("recover", () => {
     await recover(cfg(), store, svc, ui.api, createRender(), opencode({ status: null }), "boot")
 
     expect((await store.get_task("tsk_5b"))?.status).toBe("waiting_question")
-    expect(ui.list.at(-1)?.out).toBeUndefined()
+    expect(ui.list[ui.list.length - 1]?.out).toBeUndefined()
   })
 
   test("shows connecting hint during boot when opencode is not ready yet", async () => {
@@ -349,7 +357,7 @@ describe("recover", () => {
     await recover(cfg(), store, svc, ui.api, createRender(), opencode({ status: null }), "boot")
 
     expect((await store.get_task("tsk_connecting"))?.status).toBe("running")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
@@ -370,7 +378,7 @@ describe("recover", () => {
     await recover(cfg(), store, svc, ui.api, createRender(), opencode({ status: null }), "boot")
 
     expect((await store.get_task("tsk_boot"))?.status).toBe("running")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
@@ -379,10 +387,11 @@ describe("recover", () => {
     })
   })
 
-  test("finishes running task from last assistant output when remote is no longer busy", async () => {
+  test("checkpoints running task on first non-busy recover and settles on repeated identical output", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
+    const render = createRender()
     const ses = session("ses_3")
     await store.save_session(ses)
     await store.save_inbound(inbound("in_3"))
@@ -393,7 +402,7 @@ describe("recover", () => {
       store,
       svc,
       ui.api,
-      createRender(),
+      render,
       opencode({
         status: {},
         last: "final answer",
@@ -401,20 +410,50 @@ describe("recover", () => {
       "boot",
     )
 
-    expect((await store.get_task("tsk_3"))?.status).toBe("completed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
-      kind: "card",
-      body: {
-        template: "green",
-        text: "final answer",
+    const checkpointed = await store.get_task("tsk_3")
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(checkpointed?.terminal_kind).toBeUndefined()
+    expect(checkpointed?.terminal_outbound_id).toBeUndefined()
+    expect(ui.list).toEqual([
+      {
+        kind: "reply",
+        out: render.intermediate({ text: "final answer" }),
       },
+    ])
+
+    await recover(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      render,
+      opencode({
+        status: {},
+        result: {
+          state: "ok",
+          text: "final answer",
+          completed: true,
+        },
+      }),
+      "boot",
+    )
+
+    const settled = await store.get_task("tsk_3")
+    expect(settled).toMatchObject({
+      status: "completed",
+      terminal_kind: "final",
+      terminal_outbound_id: "out_reply",
     })
+    expect(settled?.result_hash).toBe(checkpointed?.result_hash)
+    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "final answer" }))
   })
 
-  test("finishes running task from task scope when session mapping is gone", async () => {
+  test("checkpoints fallback running task on first non-busy recover and settles on repeated identical output", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
+    const render = createRender()
     await store.save_inbound(inbound("in_fallback"))
     await store.save_task({
       ...task("tsk_fallback", "ses_fallback", "in_fallback", "running"),
@@ -427,7 +466,7 @@ describe("recover", () => {
       store,
       svc,
       ui.api,
-      createRender(),
+      render,
       opencode({
         status: {},
         last: "fallback done",
@@ -435,13 +474,42 @@ describe("recover", () => {
       "boot",
     )
 
-    expect((await store.get_task("tsk_fallback"))?.status).toBe("completed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
-      kind: "card",
-      body: {
-        template: "green",
-        text: "fallback done",
+    const checkpointed = await store.get_task("tsk_fallback")
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(checkpointed?.terminal_kind).toBeUndefined()
+    expect(checkpointed?.terminal_outbound_id).toBeUndefined()
+    expect(ui.list).toEqual([
+      {
+        kind: "reply",
+        out: render.intermediate({ text: "fallback done" }),
       },
+    ])
+
+    await recover(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      render,
+      opencode({
+        status: {},
+        result: {
+          state: "ok",
+          text: "fallback done",
+          completed: true,
+        },
+      }),
+      "boot",
+    )
+
+    const settled = await store.get_task("tsk_fallback")
+    expect(settled).toMatchObject({
+      status: "completed",
+      terminal_kind: "final",
+      terminal_outbound_id: "out_reply",
     })
+    expect(settled?.result_hash).toBe(checkpointed?.result_hash)
+    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "fallback done" }))
   })
 })

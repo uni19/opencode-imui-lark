@@ -114,7 +114,7 @@ function conn(item?: ConnState | null) {
 
 function next(
   row?: Task | null,
-  syncd?: "busy" | "settled" | "unknown",
+  syncd?: "busy" | "resumable" | "settled" | "unknown",
   message?: ConnState | null,
   opencode?: ConnState | null,
 ) {
@@ -127,6 +127,9 @@ function next(
   }
   if (message?.status === "reconnecting" || message?.status === "error") {
     return "飞书消息连接暂不稳定，消息同步可能延迟，可稍后重试 /status，或发送 /abort 终止。"
+  }
+  if (syncd === "resumable") {
+    return "当前执行已进入可继续的阶段性空闲状态；你可以直接发送下一条消息继续同一会话，也可以发送 /status 查看。"
   }
   if (syncd === "unknown") return "暂时无法确认远端状态，可稍后重试 /status，或发送 /abort 终止。"
   return "可稍后再发 /status 查看，或发送 /abort 终止当前执行。"
@@ -177,7 +180,7 @@ export function status_text(input: {
   current?: { session_id: string; directory?: string; workspace_id?: string; model?: OpencodeModel } | null
   pref: Prefs
   conf: AppCfg
-  syncd?: "busy" | "settled" | "unknown"
+  syncd?: "busy" | "resumable" | "settled" | "unknown"
   message?: ConnState | null
   opencode?: ConnState | null
 }) {

@@ -1,5 +1,7 @@
+/// <reference types="bun-types" />
 import { describe, expect, test } from "bun:test"
 import { on_event } from "../src/app/boot.ts"
+import { done_msg } from "../src/app/text.ts"
 import type {
   FeishuApi,
   ImSession,
@@ -357,9 +359,6 @@ describe("on_event", () => {
       },
     } satisfies OpencodeEvent)
 
-    await store.save_inbound(inbound("in_perm_queue_2"))
-    await store.save_task(row("tsk_perm_queue_2", ses.session_id, "in_perm_queue_2", "running"))
-
     await on_event(store, task, ui.api, render, opencode(), {
       type: "permission.asked",
       properties: {
@@ -370,7 +369,16 @@ describe("on_event", () => {
       },
     } satisfies OpencodeEvent)
 
-    expect((await store.get_task("tsk_perm_queue_2"))?.status).toBe("waiting_permission")
+    expect(await store.get_task("tsk_perm_queue_1")).toMatchObject({
+      status: "waiting_permission",
+      req_type: "permission",
+      req: "req_perm_queue_1",
+    })
+    const waits = await store.list_assistant_outbounds("tsk_perm_queue_1")
+    expect(waits).toHaveLength(2)
+    expect(waits.map((item) => item.req_key)).toEqual(["req_perm_queue_1", "req_perm_queue_2"])
+    expect(waits.map((item) => item.action)).toEqual(["reply", "deferred"])
+    expect(waits.map((item) => item.state)).toEqual(["open", "open"])
     expect(ui.list).toHaveLength(1)
   })
 
@@ -393,9 +401,6 @@ describe("on_event", () => {
       },
     } satisfies OpencodeEvent)
 
-    await store.save_inbound(inbound("in_q_queue_2"))
-    await store.save_task(row("tsk_q_queue_2", ses.session_id, "in_q_queue_2", "running"))
-
     await on_event(store, task, ui.api, render, opencode(), {
       type: "question.asked",
       properties: {
@@ -405,12 +410,21 @@ describe("on_event", () => {
       },
     } satisfies OpencodeEvent)
 
-    expect((await store.get_task("tsk_q_queue_2"))?.status).toBe("waiting_question")
+    expect(await store.get_task("tsk_q_queue_1")).toMatchObject({
+      status: "waiting_question",
+      req_type: "question",
+      req: "req_q_queue_1",
+    })
+    const waits = await store.list_assistant_outbounds("tsk_q_queue_1")
+    expect(waits).toHaveLength(2)
+    expect(waits.map((item) => item.req_key)).toEqual(["req_q_queue_1", "req_q_queue_2"])
+    expect(waits.map((item) => item.action)).toEqual(["reply", "deferred"])
+    expect(waits.map((item) => item.state)).toEqual(["open", "open"])
     expect(ui.list).toHaveLength(1)
   })
 
-  // 复现真实问题：同一个 prompt 连续触发两次权限请求时，后一个 req 不能覆盖前一个 task。
-  test("keeps multiple permission requests from one task in separate queued tasks", async () => {
+  // 同一个 originating task 连续触发两次权限请求时，后一个 req 必须排队在 assistant_outbound 子记录里。
+  test("queues multiple permission requests under one task as assistant outbounds", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
     const ui = feishu()
@@ -440,15 +454,22 @@ describe("on_event", () => {
       },
     } satisfies OpencodeEvent)
 
-    const list = await store.list_tasks({ session_id: ses.session_id })
-    expect(list).toHaveLength(2)
-    expect(list.map((item) => item.req)).toEqual(["req_perm_same_task_1", "req_perm_same_task_2"])
-    expect(list.map((item) => item.status)).toEqual(["waiting_permission", "waiting_permission"])
+    const tasks = await store.list_tasks({ session_id: ses.session_id })
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]).toMatchObject({
+      id: "tsk_perm_same_task",
+      status: "waiting_permission",
+      req: "req_perm_same_task_1",
+    })
+    const waits = await store.list_assistant_outbounds("tsk_perm_same_task")
+    expect(waits).toHaveLength(2)
+    expect(waits.map((item) => item.req_key)).toEqual(["req_perm_same_task_1", "req_perm_same_task_2"])
+    expect(waits.map((item) => item.state)).toEqual(["open", "open"])
     expect(ui.list).toHaveLength(1)
   })
 
-  // question.asked 也必须保留成独立排队项，不能把同一个 task 上的 req 覆盖掉。
-  test("keeps multiple question requests from one task in separate queued tasks", async () => {
+  // question.asked 也必须保留成 assistant_outbound 排队项，不能把同一个 task 上的 req 覆盖掉。
+  test("queues multiple question requests under one task as assistant outbounds", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
     const ui = feishu()
@@ -476,10 +497,17 @@ describe("on_event", () => {
       },
     } satisfies OpencodeEvent)
 
-    const list = await store.list_tasks({ session_id: ses.session_id })
-    expect(list).toHaveLength(2)
-    expect(list.map((item) => item.req)).toEqual(["req_q_same_task_1", "req_q_same_task_2"])
-    expect(list.map((item) => item.status)).toEqual(["waiting_question", "waiting_question"])
+    const tasks = await store.list_tasks({ session_id: ses.session_id })
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]).toMatchObject({
+      id: "tsk_q_same_task",
+      status: "waiting_question",
+      req: "req_q_same_task_1",
+    })
+    const waits = await store.list_assistant_outbounds("tsk_q_same_task")
+    expect(waits).toHaveLength(2)
+    expect(waits.map((item) => item.req_key)).toEqual(["req_q_same_task_1", "req_q_same_task_2"])
+    expect(waits.map((item) => item.state)).toEqual(["open", "open"])
     expect(ui.list).toHaveLength(1)
   })
 
@@ -557,7 +585,7 @@ describe("on_event", () => {
     ])
   })
 
-  test("publishes final output and completes task when session turns idle", async () => {
+  test("checkpoints final output on first idle and completes on repeated identical idle", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
     const ui = feishu()
@@ -567,7 +595,7 @@ describe("on_event", () => {
     await store.save_inbound(inbound("in_3"))
     await store.save_task(row("tsk_3", ses.session_id, "in_3"))
 
-    await on_event(store, task, ui.api, render, opencode("done"), {
+    const event = {
       type: "session.status",
       properties: {
         sessionID: ses.session_id,
@@ -575,25 +603,64 @@ describe("on_event", () => {
           type: "idle",
         },
       },
-    } satisfies OpencodeEvent)
+    } satisfies OpencodeEvent
 
-    expect((await store.get_task("tsk_3"))?.status).toBe("completed")
+    await on_event(store, task, ui.api, render, opencode("done"), event)
+
+    const checkpointed = await store.get_task("tsk_3")
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(checkpointed?.terminal_kind).toBeUndefined()
+    expect(checkpointed?.terminal_outbound_id).toBeUndefined()
     expect(ui.list).toEqual([
       {
         kind: "reply",
-        out: {
-          kind: "card",
-          body: {
-            title: "OpenCode",
-            template: "green",
-            text: "done",
-          },
-        },
+        out: render.intermediate({ text: "done" }),
       },
     ])
+
+    await on_event(
+      store,
+      task,
+      ui.api,
+      render,
+      opencode(undefined, {
+        state: "ok",
+        text: "done",
+        completed: true,
+      }),
+      event,
+    )
+
+    const settled = await store.get_task("tsk_3")
+    expect(settled).toMatchObject({
+      status: "completed",
+      terminal_kind: "final",
+      terminal_outbound_id: "out_reply",
+    })
+    expect(settled?.result_hash).toBe(checkpointed?.result_hash)
+    expect(ui.list).toEqual([
+      {
+        kind: "reply",
+        out: render.intermediate({ text: "done" }),
+      },
+      {
+        kind: "reply",
+        out: render.final({ text: "done" }),
+      },
+    ])
+
+    const history = await store.list_assistant_outbounds("tsk_3")
+    expect(history.filter((item) => item.terminal)).toHaveLength(1)
+
+    await on_event(store, task, ui.api, render, opencode("done"), event)
+
+    expect((await store.get_task("tsk_3"))?.status).toBe("completed")
+    expect(ui.list).toHaveLength(2)
+    expect((await store.list_assistant_outbounds("tsk_3")).filter((item) => item.terminal)).toHaveLength(1)
   })
 
-  test("publishes fallback completion text when idle has no final output", async () => {
+  test("checkpoints empty idle once and fails red on repeated identical idle", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
     const ui = feishu()
@@ -603,7 +670,7 @@ describe("on_event", () => {
     await store.save_inbound(inbound("in_4"))
     await store.save_task(row("tsk_4", ses.session_id, "in_4"))
 
-    await on_event(store, task, ui.api, render, opencode(), {
+    const event = {
       type: "session.status",
       properties: {
         sessionID: ses.session_id,
@@ -611,25 +678,46 @@ describe("on_event", () => {
           type: "idle",
         },
       },
-    } satisfies OpencodeEvent)
+    } satisfies OpencodeEvent
 
-    expect((await store.get_task("tsk_4"))?.status).toBe("completed")
-    expect(ui.list).toEqual([
-      {
-        kind: "reply",
-        out: {
-          kind: "card",
-          body: {
-            title: "OpenCode",
-            template: "green",
-            text: "本次执行已完成，但没有可展示的文本输出。",
-          },
-        },
+    await on_event(store, task, ui.api, render, opencode(), event)
+
+    const checkpointed = await store.get_task("tsk_4")
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(ui.list).toEqual([])
+
+    await on_event(
+      store,
+      task,
+      ui.api,
+      render,
+      opencode(undefined, {
+        state: "empty",
+        completed: true,
+      }),
+      event,
+    )
+
+    const settled = await store.get_task("tsk_4")
+    expect(settled).toMatchObject({
+      status: "failed",
+      terminal_kind: "error",
+      terminal_outbound_id: "out_reply",
+    })
+    expect(settled?.result_hash).toBe(checkpointed?.result_hash)
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        title: "OpenCode",
+        template: "red",
       },
-    ])
+    })
+    const errText = ((ui.list[ui.list.length - 1]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(errText).toContain("当前会话已结束，但没有可恢复结果，请重新发送上一条消息。")
   })
 
-  test("publishes filtered completion hint when idle only has internal text", async () => {
+  test("checkpoints filtered idle once and completes on repeated identical idle", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
     const ui = feishu()
@@ -639,6 +727,16 @@ describe("on_event", () => {
     await store.save_inbound(inbound("in_4_filtered"))
     await store.save_task(row("tsk_4_filtered", ses.session_id, "in_4_filtered"))
 
+    const event = {
+      type: "session.status",
+      properties: {
+        sessionID: ses.session_id,
+        status: {
+          type: "idle",
+        },
+      },
+    } satisfies OpencodeEvent
+
     await on_event(
       store,
       task,
@@ -647,29 +745,37 @@ describe("on_event", () => {
       opencode(undefined, {
         state: "filtered",
       }),
-      {
-        type: "session.status",
-        properties: {
-          sessionID: ses.session_id,
-          status: {
-            type: "idle",
-          },
-        },
-      } satisfies OpencodeEvent,
+      event,
     )
 
-    expect((await store.get_task("tsk_4_filtered"))?.status).toBe("completed")
+    const checkpointed = await store.get_task("tsk_4_filtered")
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(ui.list).toEqual([])
+
+    await on_event(
+      store,
+      task,
+      ui.api,
+      render,
+      opencode(undefined, {
+        state: "filtered",
+        completed: true,
+      }),
+      event,
+    )
+
+    const settled = await store.get_task("tsk_4_filtered")
+    expect(settled).toMatchObject({
+      status: "completed",
+      terminal_kind: "final",
+      terminal_outbound_id: "out_reply",
+    })
+    expect(settled?.result_hash).toBe(checkpointed?.result_hash)
     expect(ui.list).toEqual([
       {
         kind: "reply",
-        out: {
-          kind: "card",
-          body: {
-            title: "OpenCode",
-            template: "green",
-            text: "本次执行已完成，但当前只拿到了内部过程或总结信息，没有适合直接展示的最终文本答复。你可以重发一句“请直接给出最终结论”再试一次。",
-          },
-        },
+        out: render.final({ text: done_msg({ state: "filtered" }) }),
       },
     ])
   })
@@ -781,7 +887,7 @@ describe("on_event", () => {
     })
   })
 
-  test("finishes task from inbound fallback when session mapping is gone", async () => {
+  test("checkpoints fallback idle once and settles on repeated identical idle", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
     const ui = feishu()
@@ -789,7 +895,7 @@ describe("on_event", () => {
     await store.save_inbound(inbound("in_7"))
     await store.save_task(row("tsk_7", "ses_7", "in_7", "running"))
 
-    await on_event(store, task, ui.api, render, opencode("fallback done"), {
+    const event = {
       type: "session.status",
       properties: {
         sessionID: "ses_7",
@@ -797,20 +903,48 @@ describe("on_event", () => {
           type: "idle",
         },
       },
-    } satisfies OpencodeEvent)
+    } satisfies OpencodeEvent
 
-    expect((await store.get_task("tsk_7"))?.status).toBe("completed")
+    await on_event(store, task, ui.api, render, opencode("fallback done"), event)
+
+    const checkpointed = await store.get_task("tsk_7")
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
     expect(ui.list).toEqual([
       {
         kind: "reply",
-        out: {
-          kind: "card",
-          body: {
-            title: "OpenCode",
-            template: "green",
-            text: "fallback done",
-          },
-        },
+        out: render.intermediate({ text: "fallback done" }),
+      },
+    ])
+
+    await on_event(
+      store,
+      task,
+      ui.api,
+      render,
+      opencode(undefined, {
+        state: "ok",
+        text: "fallback done",
+        completed: true,
+      }),
+      event,
+    )
+
+    const settled = await store.get_task("tsk_7")
+    expect(settled).toMatchObject({
+      status: "completed",
+      terminal_kind: "final",
+      terminal_outbound_id: "out_reply",
+    })
+    expect(settled?.result_hash).toBe(checkpointed?.result_hash)
+    expect(ui.list).toEqual([
+      {
+        kind: "reply",
+        out: render.intermediate({ text: "fallback done" }),
+      },
+      {
+        kind: "reply",
+        out: render.final({ text: "fallback done" }),
       },
     ])
   })

@@ -1,6 +1,7 @@
+/// <reference types="bun-types" />
 import { describe, expect, test } from "bun:test"
 import { body, guide, holdmsg, moremsg, on_cmd, on_conn, on_msg, permit, pick, publish, recover, status_text } from "../src/app/boot.ts"
-import type { AppCfg, ConnState, FeishuApi, ImSession, InboundMessage, OpencodeSession, OpencodeSvc, RenderOut, SessionSvc, Task } from "../src/contracts.ts"
+import type { AppCfg, ConnState, FeishuApi, ImSession, InboundMessage, OpencodeResult, OpencodeSession, OpencodeStatus, OpencodeSvc, RenderOut, SessionSvc, Task } from "../src/contracts.ts"
 import { createTaskSvc } from "../src/gateway/task.ts"
 import { createRender } from "../src/render/text.ts"
 import { createMemoryStore } from "../src/storage/db.ts"
@@ -98,7 +99,7 @@ function feishu(input?: { patch_err?: string }) {
   }
 }
 
-function opencode(input?: { status?: Record<string, unknown> | null; last?: string }) {
+function opencode(input?: { status?: Record<string, OpencodeStatus> | null; last?: string | undefined; result?: OpencodeResult }) {
   return {
     async ensure() {
       return { id: "ses_1" }
@@ -109,7 +110,7 @@ function opencode(input?: { status?: Record<string, unknown> | null; last?: stri
     async sessions() {
       return []
     },
-    async status() {
+    async status(_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> {
       if (input?.status === null) throw new Error("status failed")
       return input?.status ?? {}
     },
@@ -136,14 +137,67 @@ function opencode(input?: { status?: Record<string, unknown> | null; last?: stri
     async command() {
       return undefined
     },
-    async last() {
+    async last(_input: { session_id: string; directory?: string; workspace?: string }): Promise<string | undefined> {
       return input?.last
     },
-    async result() {
+    async result(_input: { session_id: string; directory?: string; workspace?: string }): Promise<OpencodeResult> {
+      if (input?.result) return input.result
       if (input?.last) return { state: "ok" as const, text: input.last }
       return { state: "empty" as const }
     },
   } satisfies OpencodeSvc
+}
+
+async function saveWait(store: ReturnType<typeof createMemoryStore>, input: {
+  id: string
+  inbound_id: string
+  status: Task["status"]
+  req: string
+  kind: "approval" | "question"
+  payload: Record<string, unknown>
+  outbound_id?: string
+  seq?: number
+  created_at?: number
+  updated_at?: number
+}) {
+  await store.save_inbound(
+    inbound({
+      id: input.inbound_id,
+      event_id: `evt_${input.inbound_id}`,
+      message_id: `msg_${input.inbound_id}`,
+    }),
+  )
+  const taskRow = row({
+    id: input.id,
+    inbound_id: input.inbound_id,
+    status: input.status,
+    req_type: input.kind === "approval" ? "permission" : "question",
+    req: input.req,
+    req_id: input.req,
+    outbound_id: input.outbound_id,
+    created_at: input.created_at,
+    updated_at: input.updated_at,
+  })
+  const action: "reply" | "patch" = input.outbound_id ? "patch" : "reply"
+  const outbound = {
+    id: `aso_${input.id}_${input.req}`,
+    task_id: input.id,
+    session_id: taskRow.session_id,
+    seq: input.seq ?? 1,
+    kind: input.kind,
+    action,
+    state: "open" as const,
+    origin_inbound_id: input.inbound_id,
+    origin_message_id: `msg_${input.inbound_id}`,
+    req_key: input.req,
+    terminal: false,
+    feishu_message_id: input.outbound_id,
+    payload: input.payload,
+    created_at: input.created_at ?? 1,
+    updated_at: input.updated_at ?? 1,
+  }
+  await store.save_task(taskRow)
+  await store.save_assistant_outbound(outbound)
 }
 
 function route() {
@@ -306,6 +360,11 @@ describe("boot helpers", () => {
   })
 
   test("renders status report with connection and progress summary", () => {
+    const current = {
+      session_id: "ses_1",
+      directory: "/tmp/work",
+      workspace_id: "ws_1",
+    }
     const message = {
       name: "message",
       status: "reconnecting",
@@ -328,19 +387,7 @@ describe("boot helpers", () => {
           note: "question:0:%E8%AF%B7%E9%80%89%E6%8B%A9:A|B|C|D",
           updated_at: 1710000000000,
         }),
-        current: {
-          id: "ims_1",
-          platform: "feishu",
-          tenant_id: "tenant",
-          chat_id: "chat",
-          user_id: "user",
-          session_id: "ses_1",
-          directory: "/tmp/work",
-          workspace_id: "ws_1",
-          state: "active",
-          created_at: 1,
-          updated_at: 1,
-        },
+        current,
         pref: {
           chat: {
             scope: "chat",
@@ -368,19 +415,7 @@ describe("boot helpers", () => {
           note: "question:0:%E8%AF%B7%E9%80%89%E6%8B%A9:A|B|C|D",
           updated_at: 1710000000000,
         }),
-        current: {
-          id: "ims_1",
-          platform: "feishu",
-          tenant_id: "tenant",
-          chat_id: "chat",
-          user_id: "user",
-          session_id: "ses_1",
-          directory: "/tmp/work",
-          workspace_id: "ws_1",
-          state: "active",
-          created_at: 1,
-          updated_at: 1,
-        },
+        current,
         pref: {
           chat: {
             scope: "chat",
@@ -408,19 +443,7 @@ describe("boot helpers", () => {
           note: "question:0:%E8%AF%B7%E9%80%89%E6%8B%A9:A|B|C|D",
           updated_at: 1710000000000,
         }),
-        current: {
-          id: "ims_1",
-          platform: "feishu",
-          tenant_id: "tenant",
-          chat_id: "chat",
-          user_id: "user",
-          session_id: "ses_1",
-          directory: "/tmp/work",
-          workspace_id: "ws_1",
-          state: "active",
-          created_at: 1,
-          updated_at: 1,
-        },
+        current,
         pref: {
           chat: {
             scope: "chat",
@@ -448,19 +471,7 @@ describe("boot helpers", () => {
           note: "question:0:%E8%AF%B7%E9%80%89%E6%8B%A9:A|B|C|D",
           updated_at: 1710000000000,
         }),
-        current: {
-          id: "ims_1",
-          platform: "feishu",
-          tenant_id: "tenant",
-          chat_id: "chat",
-          user_id: "user",
-          session_id: "ses_1",
-          directory: "/tmp/work",
-          workspace_id: "ws_1",
-          state: "active",
-          created_at: 1,
-          updated_at: 1,
-        },
+        current,
         pref: {
           chat: {
             scope: "chat",
@@ -488,19 +499,7 @@ describe("boot helpers", () => {
           note: "question:0:%E8%AF%B7%E9%80%89%E6%8B%A9:A|B|C|D",
           updated_at: 1710000000000,
         }),
-        current: {
-          id: "ims_1",
-          platform: "feishu",
-          tenant_id: "tenant",
-          chat_id: "chat",
-          user_id: "user",
-          session_id: "ses_1",
-          directory: "/tmp/work",
-          workspace_id: "ws_1",
-          state: "active",
-          created_at: 1,
-          updated_at: 1,
-        },
+        current,
         pref: {
           chat: {
             scope: "chat",
@@ -528,19 +527,7 @@ describe("boot helpers", () => {
           note: "开始处理: build / gpt-5.4",
           updated_at: 1710000000000,
         }),
-        current: {
-          id: "ims_1",
-          platform: "feishu",
-          tenant_id: "tenant",
-          chat_id: "chat",
-          user_id: "user",
-          session_id: "ses_1",
-          directory: "/tmp/work",
-          workspace_id: "ws_1",
-          state: "active",
-          created_at: 1,
-          updated_at: 1,
-        },
+        current,
         pref: {
           chat: {
             scope: "chat",
@@ -591,9 +578,11 @@ describe("boot helpers", () => {
         note: "等待补充说明",
       }),
     )
-    await store.save_pending({
+    await store.save_task_pending({
+      task_id: "tsk_1",
       session_id: "ses_1",
-      inbound_id: "in_1",
+      origin_inbound_id: "in_1",
+      origin_message_id: "msg_1",
       assets: [
         {
           kind: "image",
@@ -626,12 +615,186 @@ describe("boot helpers", () => {
       },
     )
 
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
         text: "飞书消息连接已恢复，仍在等待你的补充说明。",
       },
+    })
+  })
+
+  test("message reconnect clears invalid waiting attachment pending", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_attachment",
+        note: "等待补充说明",
+      }),
+    )
+    await store.save_task_pending({
+      task_id: "tsk_1",
+      session_id: "ses_1",
+      origin_inbound_id: "in_1",
+      origin_message_id: "msg_1",
+      assets: [
+        {
+          kind: "image",
+          key: "img_1",
+          name: "broken.png",
+        },
+      ],
+      created_at: 1,
+      updated_at: 1,
+    })
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode(),
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 1,
+      },
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    expect((await store.get_task("tsk_1"))?.status).toBe("failed")
+    expect(await store.get_task_pending("tsk_1")).toBeNull()
+    const out = ui.list[ui.list.length - 1]?.out as { body?: { text?: string; template?: string } } | undefined
+    expect(out?.body?.template).toBe("red")
+    expect(out?.body?.text ?? "").toContain("附件缓存已失效")
+  })
+
+  test("/session replay does not duplicate identical waiting attachment history", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const assets = [
+      {
+        kind: "image" as const,
+        key: "img_1",
+        name: "a.png",
+        mime: "image/png",
+        url: "file:///tmp/a.png",
+      },
+    ]
+    const hold = render.progress({
+      text: holdmsg(assets),
+    })
+    await store.save_session(session({ session_id: "ses_current" }))
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        session_id: "ses_wait",
+        status: "waiting_attachment",
+        note: "等待补充说明",
+        outbound_id: "out_wait",
+      }),
+    )
+    await store.save_outbound({
+      task_id: "tsk_1",
+      msg_id: "out_wait",
+      kind: hold.kind,
+      payload: hold.body,
+      created_at: 1,
+      updated_at: 1,
+    })
+    await store.save_assistant_outbound({
+      id: "aso_1",
+      task_id: "tsk_1",
+      session_id: "ses_wait",
+      seq: 1,
+      kind: "attachment",
+      action: "patch",
+      state: "emitted",
+      origin_inbound_id: "in_1",
+      origin_message_id: "msg_1",
+      terminal: false,
+      feishu_message_id: "out_wait",
+      payload: hold.body,
+      created_at: 1,
+      updated_at: 1,
+    })
+    await store.save_task_pending({
+      task_id: "tsk_1",
+      session_id: "ses_wait",
+      origin_inbound_id: "in_1",
+      origin_message_id: "msg_1",
+      assets,
+      created_at: 1,
+      updated_at: 1,
+    })
+    const oc = {
+      ...opencode(),
+      async session(id: string) {
+        return {
+          id,
+          title: "picked",
+          directory: "/tmp",
+          created_at: 1,
+          updated_at: 1,
+        } satisfies OpencodeSession
+      },
+    } satisfies OpencodeSvc
+
+    const first = await on_cmd(
+      "/session ses_wait",
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_cmd_1",
+        event_id: "evt_cmd_1",
+        message_id: "msg_cmd_1",
+        text: "/session ses_wait",
+      }),
+    )
+    const second = await on_cmd(
+      "/session ses_wait",
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_cmd_2",
+        event_id: "evt_cmd_2",
+        message_id: "msg_cmd_2",
+        text: "/session ses_wait",
+      }),
+    )
+
+    expect(first).toBeTrue()
+    expect(second).toBeTrue()
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "reply"])
+    const history = await store.list_assistant_outbounds("tsk_1")
+    expect(history).toHaveLength(1)
+    expect(history[0]).toMatchObject({
+      kind: "attachment",
+      action: "patch",
+      state: "emitted",
+      feishu_message_id: "out_wait",
+      payload: hold.body,
     })
   })
 
@@ -673,7 +836,7 @@ describe("boot helpers", () => {
     )
 
     expect((await store.get_task("tsk_1"))?.status).toBe("waiting_permission")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         type: "approval",
@@ -719,7 +882,7 @@ describe("boot helpers", () => {
     )
 
     expect((await store.get_task("tsk_1"))?.status).toBe("failed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "red",
@@ -764,7 +927,7 @@ describe("boot helpers", () => {
     )
 
     expect((await store.get_task("tsk_1"))?.status).toBe("waiting_permission")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
@@ -810,7 +973,7 @@ describe("boot helpers", () => {
     )
 
     expect((await store.get_task("tsk_1"))?.status).toBe("running")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
@@ -819,10 +982,11 @@ describe("boot helpers", () => {
     })
   })
 
-  test("message reconnect finishes running task when remote is already idle with output", async () => {
+  test("message reconnect checkpoints first idle observation and settles on repeated identical output", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
+    const render = createRender()
     await store.save_session(session())
     await store.save_inbound(inbound())
     await store.save_task(row())
@@ -832,7 +996,7 @@ describe("boot helpers", () => {
       store,
       svc,
       ui.api,
-      createRender(),
+      render,
       opencode({
         status: {},
         last: "resume done",
@@ -850,14 +1014,53 @@ describe("boot helpers", () => {
       },
     )
 
-    expect((await store.get_task("tsk_1"))?.status).toBe("completed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
-      kind: "card",
-      body: {
-        template: "green",
-        text: "resume done",
+    const checkpointed = await store.get_task("tsk_1")
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(checkpointed?.terminal_kind).toBeUndefined()
+    expect(checkpointed?.terminal_outbound_id).toBeUndefined()
+    expect(ui.list).toEqual([
+      {
+        kind: "reply",
+        out: render.intermediate({ text: "resume done" }),
       },
+    ])
+
+    await on_conn(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      render,
+      opencode({
+        status: {},
+        result: {
+          state: "ok",
+          text: "resume done",
+          completed: true,
+        },
+      }),
+      {
+        name: "message",
+        status: "reconnecting",
+        updated_at: 1,
+        attempt: 1,
+      },
+      {
+        name: "message",
+        status: "ready",
+        updated_at: 2,
+      },
+    )
+
+    const settled = await store.get_task("tsk_1")
+    expect(settled).toMatchObject({
+      status: "completed",
+      terminal_kind: "final",
+      terminal_outbound_id: "out_reply",
     })
+    expect(settled?.result_hash).toBe(checkpointed?.result_hash)
+    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "resume done" }))
   })
 
   test("message reconnect keeps running task alive when remote status is unknown", async () => {
@@ -891,7 +1094,7 @@ describe("boot helpers", () => {
     )
 
     expect((await store.get_task("tsk_1"))?.status).toBe("running")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
@@ -932,7 +1135,7 @@ describe("boot helpers", () => {
       },
     )
 
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
@@ -972,7 +1175,7 @@ describe("boot helpers", () => {
       },
     )
 
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
@@ -1096,10 +1299,11 @@ describe("boot helpers", () => {
     })
   })
 
-  test("boot recovered running task is not finished again by later watchdog", async () => {
+  test("boot recovered running task checkpoints first idle observation, settles once, and ignores later recovery passes", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
+    const render = createRender()
     await store.save_session(session())
     await store.save_inbound(inbound())
     await store.save_task(
@@ -1108,13 +1312,13 @@ describe("boot helpers", () => {
       }),
     )
 
-    await recover(cfg(), store, svc, ui.api, createRender(), opencode({ status: null }), "boot")
+    await recover(cfg(), store, svc, ui.api, render, opencode({ status: null }), "boot")
     await on_conn(
       cfg(),
       store,
       svc,
       ui.api,
-      createRender(),
+      render,
       opencode({
         status: {},
         last: "done after reconnect",
@@ -1131,7 +1335,11 @@ describe("boot helpers", () => {
       },
     )
 
-    expect((await store.get_task("tsk_1"))?.status).toBe("completed")
+    const checkpointed = await store.get_task("tsk_1")
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(checkpointed?.terminal_kind).toBeUndefined()
+    expect(checkpointed?.terminal_outbound_id).toBeUndefined()
     expect(ui.list).toHaveLength(2)
     expect(ui.list[0]).toMatchObject({
       kind: "reply",
@@ -1143,16 +1351,67 @@ describe("boot helpers", () => {
         },
       },
     })
-    expect(ui.list[1]).toMatchObject({
-      kind: "patch",
-      out: {
-        kind: "card",
-        body: {
-          template: "green",
-          text: "done after reconnect",
-        },
-      },
+    expect(ui.list[1]).toEqual({
+      kind: "reply",
+      out: render.intermediate({ text: "done after reconnect" }),
     })
+
+    await recover(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      render,
+      opencode({
+        status: {},
+        result: {
+          state: "ok",
+          text: "done after reconnect",
+          completed: true,
+        },
+      }),
+      "boot",
+    )
+
+    const settled = await store.get_task("tsk_1")
+    expect(settled).toMatchObject({
+      status: "completed",
+      terminal_kind: "final",
+      terminal_outbound_id: "out_reply",
+    })
+    expect(settled?.result_hash).toBe(checkpointed?.result_hash)
+    expect(ui.list[2]).toEqual({
+      kind: "patch",
+      out: render.final({ text: "done after reconnect" }),
+    })
+
+    await recover(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      render,
+      opencode({
+        status: {},
+        last: "done after reconnect",
+      }),
+      "boot",
+    )
+
+    expect((await store.get_task("tsk_1"))?.status).toBe("completed")
+    const history = await store.list_assistant_outbounds("tsk_1")
+    const terminals = history.filter((item) => item.terminal && item.state === "emitted")
+    expect(terminals).toHaveLength(1)
+    expect(terminals[0]).toMatchObject({
+      feishu_message_id: "out_reply",
+      payload: expect.objectContaining({
+        template: "green",
+        state: "final",
+        title: "OpenCode",
+        text: "最终完成\n\ndone after reconnect",
+      }),
+    })
+    expect(ui.list).toHaveLength(3)
   })
 
   test("connection burst only signals reconnecting once for active task", async () => {
@@ -1346,7 +1605,7 @@ describe("boot helpers", () => {
     )
 
     expect(ui.list).toHaveLength(2)
-    expect(ui.list.at(-1)).toMatchObject({
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
       kind: "patch",
       out: {
         kind: "card",
@@ -1441,7 +1700,7 @@ describe("boot helpers", () => {
       },
     )
 
-    expect(ui.list.at(-1)).toMatchObject({
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
       kind: "patch",
       out: {
         kind: "card",
@@ -1578,7 +1837,7 @@ describe("boot helpers", () => {
     )
 
     expect(ui.list).toHaveLength(2)
-    expect(ui.list.at(-1)).toMatchObject({
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
       kind: "patch",
       out: {
         kind: "card",
@@ -1670,7 +1929,7 @@ describe("boot helpers", () => {
       },
     )
 
-    expect(ui.list.at(-1)).toMatchObject({
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
       kind: "patch",
       out: {
         kind: "card",
@@ -1724,9 +1983,12 @@ describe("publish", () => {
         },
       },
       { dedup: true },
+      undefined,
+      { kind: "progress" },
     )
 
     expect(ui.list).toEqual([])
+    expect(await store.list_assistant_outbounds("tsk_1")).toEqual([])
   })
 
   test("does not dedup when only step changes", async () => {
@@ -1770,6 +2032,8 @@ describe("publish", () => {
         },
       },
       { dedup: true },
+      undefined,
+      { kind: "progress" },
     )
 
     expect(ui.list).toEqual([
@@ -1786,6 +2050,170 @@ describe("publish", () => {
         },
       },
     ])
+    const history = await store.list_assistant_outbounds("tsk_1")
+    expect(history).toHaveLength(1)
+    expect(history[0]).toMatchObject({
+      task_id: "tsk_1",
+      session_id: "ses_1",
+      seq: 1,
+      kind: "progress",
+      action: "patch",
+      state: "emitted",
+      origin_inbound_id: "in_1",
+      origin_message_id: "msg_1",
+      terminal: false,
+      feishu_message_id: "out_old",
+      payload: {
+        title: "OpenCode",
+        template: "blue",
+        step: "步骤 2",
+        text: "处理中…",
+      },
+    })
+  })
+
+  test("appends generic history row when first publish replies", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_inbound(inbound())
+    await store.save_task(row())
+
+    await publish(
+      store,
+      task,
+      ui.api,
+      "ses_1",
+      "chat",
+      {
+        kind: "card",
+        body: {
+          title: "OpenCode",
+          template: "wathet",
+          text: "已收到：开始处理",
+        },
+      },
+      undefined,
+      undefined,
+      { kind: "ack" },
+    )
+
+    expect(ui.list).toEqual([
+      {
+        kind: "reply",
+        out: {
+          kind: "card",
+          body: {
+            title: "OpenCode",
+            template: "wathet",
+            text: "已收到：开始处理",
+          },
+        },
+      },
+    ])
+    expect((await store.get_task("tsk_1"))?.outbound_id).toBe("out_reply")
+    expect(await store.get_outbound("tsk_1")).toMatchObject({
+      msg_id: "out_reply",
+    })
+    const history = await store.list_assistant_outbounds("tsk_1")
+    expect(history).toHaveLength(1)
+    expect(history[0]).toMatchObject({
+      task_id: "tsk_1",
+      session_id: "ses_1",
+      seq: 1,
+      kind: "ack",
+      action: "reply",
+      state: "emitted",
+      origin_inbound_id: "in_1",
+      origin_message_id: "msg_1",
+      terminal: false,
+      feishu_message_id: "out_reply",
+      payload: {
+        title: "OpenCode",
+        template: "wathet",
+        text: "已收到：开始处理",
+      },
+    })
+  })
+
+  test("first publish prefers reply anchor over inbound lookup", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const list: Array<{ kind: "send" | "reply"; msg_id?: string; chat_id?: string; out: RenderOut }> = []
+    const api = {
+      async send(item) {
+        list.push({ kind: "send", chat_id: item.chat_id, out: item.out })
+        return { id: "out_send" }
+      },
+      async reply(item) {
+        list.push({ kind: "reply", msg_id: item.msg_id, out: item.out })
+        return { id: "out_reply" }
+      },
+      async patch() {
+        throw new Error("not used")
+      },
+      async fetch() {
+        throw new Error("not used")
+      },
+      async sync() {},
+      names() {
+        return []
+      },
+    } satisfies FeishuApi
+    await store.save_inbound(
+      inbound({
+        message_id: "msg_inbound",
+      }),
+    )
+    await store.save_task(
+      row({
+        reply_anchor_message_id: "msg_anchor",
+      }),
+    )
+
+    await publish(
+      store,
+      task,
+      api,
+      "ses_1",
+      "chat",
+      {
+        kind: "card",
+        body: {
+          title: "OpenCode",
+          template: "wathet",
+          text: "已收到：开始处理",
+        },
+      },
+      undefined,
+      undefined,
+      { kind: "ack" },
+    )
+
+    expect(list).toEqual([
+      {
+        kind: "reply",
+        msg_id: "msg_anchor",
+        out: {
+          kind: "card",
+          body: {
+            title: "OpenCode",
+            template: "wathet",
+            text: "已收到：开始处理",
+          },
+        },
+      },
+    ])
+    expect((await store.get_task("tsk_1"))?.outbound_id).toBe("out_reply")
+    const history = await store.list_assistant_outbounds("tsk_1")
+    expect(history).toHaveLength(1)
+    expect(history[0]).toMatchObject({
+      kind: "ack",
+      action: "reply",
+      state: "emitted",
+      origin_message_id: "msg_anchor",
+      feishu_message_id: "out_reply",
+    })
   })
 
   test("falls back to reply when patch fails", async () => {
@@ -1800,6 +2228,27 @@ describe("publish", () => {
         outbound_id: "out_old",
       }),
     )
+    await store.save_assistant_outbound({
+      id: "aso_old",
+      task_id: "tsk_1",
+      session_id: "ses_1",
+      seq: 1,
+      kind: "progress",
+      action: "patch",
+      state: "emitted",
+      origin_inbound_id: "in_1",
+      origin_message_id: "msg_1",
+      terminal: false,
+      feishu_message_id: "out_old",
+      payload: {
+        title: "OpenCode",
+        template: "blue",
+        step: "步骤 1",
+        text: "处理中…",
+      },
+      created_at: 1,
+      updated_at: 1,
+    })
 
     try {
       await publish(
@@ -1816,6 +2265,9 @@ describe("publish", () => {
             text: "done",
           },
         },
+        undefined,
+        undefined,
+        { kind: "final", terminal: true },
       )
     } finally {
       console.warn = warn
@@ -1825,6 +2277,32 @@ describe("publish", () => {
     expect((await store.get_task("tsk_1"))?.outbound_id).toBe("out_reply")
     expect(await store.get_outbound("tsk_1")).toMatchObject({
       msg_id: "out_reply",
+    })
+    const history = await store.list_assistant_outbounds("tsk_1")
+    expect(history).toHaveLength(2)
+    expect(history[0]).toMatchObject({
+      id: "aso_old",
+      kind: "progress",
+      action: "patch",
+      state: "emitted",
+      feishu_message_id: "out_old",
+    })
+    expect(history[1]).toMatchObject({
+      task_id: "tsk_1",
+      session_id: "ses_1",
+      seq: 2,
+      kind: "final",
+      action: "reply",
+      state: "emitted",
+      origin_inbound_id: "in_1",
+      origin_message_id: "msg_1",
+      terminal: true,
+      feishu_message_id: "out_reply",
+      payload: {
+        title: "OpenCode",
+        template: "green",
+        text: "done",
+      },
     })
   })
 })
@@ -2067,12 +2545,12 @@ describe("commands", () => {
     })
     await store.set_conn({
       name: "message",
-      status: "connected",
+      status: "ready",
       updated_at: 1,
     })
     await store.set_conn({
       name: "opencode",
-      status: "connected",
+      status: "ready",
       updated_at: 1,
     })
 
@@ -2133,7 +2611,7 @@ describe("commands", () => {
           workspace: "ws_chat",
         })
         return {
-          ses_1: { type: "running" },
+          ses_1: { type: "busy" },
           ses_2: { type: "idle" },
         }
       },
@@ -2144,7 +2622,7 @@ describe("commands", () => {
     expect(ok).toBeTrue()
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
     expect(text).toContain("最近会话（共 2 条）：")
-    expect(text).toContain("[当前] [running] current")
+    expect(text).toContain("[当前] [busy] current")
     expect(text).toContain("session: ses_2")
     expect(text).toContain("目录: /tmp/chat (workspace=ws_chat)")
   })
@@ -2453,30 +2931,41 @@ describe("commands", () => {
     const ui = feishu()
     await store.save_session(session())
     await store.save_inbound(inbound())
-    await store.save_task(
-      row({
-        id: "tsk_q_1",
-        inbound_id: "in_q_1",
-        status: "waiting_question",
-        req_type: "question",
-        req: "req_q_1",
-        note: `question:0:${encodeURIComponent("第一个问题")}:${encodeURIComponent("A")}|${encodeURIComponent("B")}`,
-        outbound_id: "out_q_1",
-      }),
-    )
+    await saveWait(store, {
+      id: "tsk_q_1",
+      inbound_id: "in_q_1",
+      status: "waiting_question",
+      req: "req_q_1",
+      kind: "question",
+      outbound_id: "out_q_1",
+      payload: {
+        title: "第一个问题",
+        opts: ["A", "B"],
+        custom: false,
+      },
+      seq: 1,
+    })
     await store.save_inbound(inbound({ id: "in_q_2", event_id: "evt_q_2", message_id: "msg_q_2" }))
-    await store.save_task(
-      row({
-        id: "tsk_q_2",
-        inbound_id: "in_q_2",
-        created_at: 2,
-        updated_at: 2,
-        status: "waiting_question",
-        req_type: "question",
-        req: "req_q_2",
-        note: `question:0:${encodeURIComponent("第二个问题")}:${encodeURIComponent("X")}|${encodeURIComponent("Y")}`,
-      }),
-    )
+    await store.save_assistant_outbound({
+      id: "aso_tsk_q_1_req_q_2",
+      task_id: "tsk_q_1",
+      session_id: "ses_1",
+      seq: 2,
+      kind: "question",
+      action: "deferred",
+      state: "open",
+      origin_inbound_id: "in_q_1",
+      origin_message_id: "msg_in_q_1",
+      req_key: "req_q_2",
+      terminal: false,
+      payload: {
+        title: "第二个问题",
+        opts: ["X", "Y"],
+        custom: false,
+      },
+      created_at: 2,
+      updated_at: 2,
+    })
     const calls: Array<{ req: string; answers: string[][] }> = []
     const oc = {
       ...opencode(),
@@ -2502,8 +2991,8 @@ describe("commands", () => {
     )
 
     expect(calls).toEqual([{ req: "req_q_1", answers: [["A"]] }])
-    expect((await store.get_task("tsk_q_1"))?.status).toBe("running")
-    expect((await store.get_task("tsk_q_2"))?.status).toBe("waiting_question")
+    expect((await store.get_task("tsk_q_1"))?.status).toBe("waiting_question")
+    expect((await store.get_task("tsk_q_1"))?.req).toBe("req_q_2")
     expect(
       ui.list.some((item) =>
         item.out.kind === "card" &&
@@ -2523,30 +3012,39 @@ describe("commands", () => {
     const ui = feishu()
     await store.save_session(session())
     await store.save_inbound(inbound())
-    await store.save_task(
-      row({
-        id: "tsk_perm_1",
-        inbound_id: "in_perm_1",
-        status: "waiting_permission",
-        req_type: "permission",
-        req: "req_perm_1",
-        note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/tmp" }))}`,
-        outbound_id: "out_perm_1",
-      }),
-    )
+    await saveWait(store, {
+      id: "tsk_perm_1",
+      inbound_id: "in_perm_1",
+      status: "waiting_permission",
+      req: "req_perm_1",
+      kind: "approval",
+      outbound_id: "out_perm_1",
+      payload: {
+        tool: "external_directory",
+        detail: JSON.stringify({ filepath: "/tmp" }),
+      },
+      seq: 1,
+    })
     await store.save_inbound(inbound({ id: "in_perm_2", event_id: "evt_perm_2", message_id: "msg_perm_2" }))
-    await store.save_task(
-      row({
-        id: "tsk_perm_2",
-        inbound_id: "in_perm_2",
-        created_at: 2,
-        updated_at: 2,
-        status: "waiting_permission",
-        req_type: "permission",
-        req: "req_perm_2",
-        note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/usr" }))}`,
-      }),
-    )
+    await store.save_assistant_outbound({
+      id: "aso_tsk_perm_1_req_perm_2",
+      task_id: "tsk_perm_1",
+      session_id: "ses_1",
+      seq: 2,
+      kind: "approval",
+      action: "deferred",
+      state: "open",
+      origin_inbound_id: "in_perm_1",
+      origin_message_id: "msg_in_perm_1",
+      req_key: "req_perm_2",
+      terminal: false,
+      payload: {
+        tool: "external_directory",
+        detail: JSON.stringify({ filepath: "/usr" }),
+      },
+      created_at: 2,
+      updated_at: 2,
+    })
     const calls: Array<{ req: string; reply: "once" | "always" | "reject" }> = []
     const oc = {
       ...opencode({
@@ -2576,8 +3074,8 @@ describe("commands", () => {
     )
 
     expect(calls).toEqual([{ req: "req_perm_1", reply: "once" }])
-    expect((await store.get_task("tsk_perm_1"))?.status).toBe("running")
-    expect((await store.get_task("tsk_perm_2"))?.status).toBe("waiting_permission")
+    expect((await store.get_task("tsk_perm_1"))?.status).toBe("waiting_permission")
+    expect((await store.get_task("tsk_perm_1"))?.req).toBe("req_perm_2")
     expect(
       ui.list.some((item) =>
         item.out.kind === "card" &&
@@ -2640,7 +3138,7 @@ describe("commands", () => {
       },
     ])
     expect((await store.get_task("tsk_1"))?.status).toBe("running")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         title: "OpenCode",
@@ -2707,7 +3205,7 @@ describe("commands", () => {
     ])
     expect((await store.get_task("tsk_1"))?.status).toBe("running")
     expect((await store.get_task("tsk_1"))?.note).toBe("已收到你的更正说明，正在继续执行…")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         title: "OpenCode",
@@ -2725,30 +3223,39 @@ test("next queued approval is sent as a new message when it has no outbound yet"
   const ui = feishu()
   await store.save_session(session())
   await store.save_inbound(inbound())
-  await store.save_task(
-    row({
-      id: "tsk_perm_chain_1",
-      inbound_id: "in_perm_chain_1",
-      status: "waiting_permission",
-      req_type: "permission",
-      req: "req_perm_chain_1",
-      note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/tmp" }))}`,
-      outbound_id: "out_perm_chain_1",
-    }),
-  )
+  await saveWait(store, {
+    id: "tsk_perm_chain_1",
+    inbound_id: "in_perm_chain_1",
+    status: "waiting_permission",
+    req: "req_perm_chain_1",
+    kind: "approval",
+    outbound_id: "out_perm_chain_1",
+    payload: {
+      tool: "external_directory",
+      detail: JSON.stringify({ filepath: "/tmp" }),
+    },
+    seq: 1,
+  })
   await store.save_inbound(inbound({ id: "in_perm_chain_2", event_id: "evt_perm_chain_2", message_id: "msg_perm_chain_2" }))
-  await store.save_task(
-    row({
-      id: "tsk_perm_chain_2",
-      inbound_id: "in_perm_chain_2",
-      created_at: 2,
-      updated_at: 2,
-      status: "waiting_permission",
-      req_type: "permission",
-      req: "req_perm_chain_2",
-      note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/etc" }))}`,
-    }),
-  )
+  await store.save_assistant_outbound({
+    id: "aso_tsk_perm_chain_1_req_perm_chain_2",
+    task_id: "tsk_perm_chain_1",
+    session_id: "ses_1",
+    seq: 2,
+    kind: "approval",
+    action: "deferred",
+    state: "open",
+    origin_inbound_id: "in_perm_chain_1",
+    origin_message_id: "msg_in_perm_chain_1",
+    req_key: "req_perm_chain_2",
+    terminal: false,
+    payload: {
+      tool: "external_directory",
+      detail: JSON.stringify({ filepath: "/etc" }),
+    },
+    created_at: 2,
+    updated_at: 2,
+  })
   const oc = {
     ...opencode({
       status: {
@@ -2774,7 +3281,7 @@ test("next queued approval is sent as a new message when it has no outbound yet"
     }),
   )
 
-  expect(ui.list.at(-1)).toMatchObject({
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
     kind: "reply",
     out: {
       kind: "card",
@@ -2784,5 +3291,7 @@ test("next queued approval is sent as a new message when it has no outbound yet"
       },
     },
   })
-  expect((await store.get_task("tsk_perm_chain_2"))?.outbound_id).toBeTruthy()
+  const waits = await store.list_assistant_outbounds("tsk_perm_chain_1")
+  const next = waits.find((item) => item.req_key === "req_perm_chain_2")
+  expect(next?.feishu_message_id).toBeTruthy()
 })

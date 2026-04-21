@@ -1,6 +1,7 @@
+/// <reference types="bun-types" />
 import { describe, expect, test } from "bun:test"
 import { sweep } from "../src/app/boot.ts"
-import type { AppCfg, FeishuApi, ImSession, InboundMessage, OpencodeSvc, RenderOut, Task } from "../src/contracts.ts"
+import type { AppCfg, FeishuApi, ImSession, InboundMessage, OpencodeResult, OpencodeStatus, OpencodeSvc, RenderOut, Task } from "../src/contracts.ts"
 import { createTaskSvc } from "../src/gateway/task.ts"
 import { createRender } from "../src/render/text.ts"
 import { createMemoryStore } from "../src/storage/db.ts"
@@ -90,7 +91,7 @@ function feishu() {
   }
 }
 
-function opencode(input: { status?: Record<string, unknown> | null; last?: string | undefined }) {
+function opencode(input: { status?: Record<string, OpencodeStatus> | null; last?: string | undefined; result?: OpencodeResult }) {
   return {
     async ensure() {
       return { id: "ses_1" }
@@ -101,7 +102,7 @@ function opencode(input: { status?: Record<string, unknown> | null; last?: strin
     async sessions() {
       return []
     },
-    async status() {
+    async status(_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> {
       if (input.status === null) throw new Error("status failed")
       return input.status ?? {}
     },
@@ -128,8 +129,11 @@ function opencode(input: { status?: Record<string, unknown> | null; last?: strin
     async command() {
       return undefined
     },
-    async last() {
+    async last(_input: { session_id: string; directory?: string; workspace?: string }): Promise<string | undefined> {
       return input.last
+    },
+    async result(_input: { session_id: string; directory?: string; workspace?: string }): Promise<OpencodeResult> {
+      return input.result ?? (input.last ? { state: "ok", text: input.last } : { state: "empty" })
     },
   } satisfies OpencodeSvc
 }
@@ -162,7 +166,7 @@ describe("sweep", () => {
     )
 
     expect((await store.get_task("tsk_1"))?.status).toBe("running")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
@@ -171,10 +175,11 @@ describe("sweep", () => {
     })
   })
 
-  test("fails stale running task when remote is idle and no final output exists", async () => {
+  test("checkpoints stale running task on first idle sweep and fails on repeated identical empty result", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
+    const render = createRender()
     const ses = session("ses_2")
     await store.save_session(ses)
     await store.save_inbound(inbound("in_2"))
@@ -187,7 +192,7 @@ describe("sweep", () => {
       store,
       svc,
       ui.api,
-      createRender(),
+      render,
       opencode({
         status: {},
       }),
@@ -195,8 +200,38 @@ describe("sweep", () => {
       1000,
     )
 
-    expect((await store.get_task("tsk_2"))?.status).toBe("failed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    const checkpointed = await store.get_task("tsk_2")
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(checkpointed?.terminal_kind).toBeUndefined()
+    expect(checkpointed?.terminal_outbound_id).toBeUndefined()
+    expect(ui.list).toEqual([])
+
+    await sweep(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      render,
+      opencode({
+        status: {},
+        result: {
+          state: "empty",
+          completed: true,
+        },
+      }),
+      (checkpointed?.updated_at ?? 0) + 1000,
+      1000,
+    )
+
+    const settled = await store.get_task("tsk_2")
+    expect(settled).toMatchObject({
+      status: "failed",
+      terminal_kind: "error",
+      terminal_outbound_id: "out_reply",
+    })
+    expect(settled?.result_hash).toBe(checkpointed?.result_hash)
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "red",
@@ -205,10 +240,11 @@ describe("sweep", () => {
     })
   })
 
-  test("finishes stale running task from task scope when session mapping is gone", async () => {
+  test("checkpoints fallback running task on first idle sweep and settles on repeated identical output", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
+    const render = createRender()
     await store.save_inbound(inbound("in_3"))
     await store.save_task({
       ...row("tsk_3", "ses_3", "in_3", "running"),
@@ -221,7 +257,7 @@ describe("sweep", () => {
       store,
       svc,
       ui.api,
-      createRender(),
+      render,
       opencode({
         status: {},
         last: "watch done",
@@ -230,14 +266,44 @@ describe("sweep", () => {
       1000,
     )
 
-    expect((await store.get_task("tsk_3"))?.status).toBe("completed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
-      kind: "card",
-      body: {
-        template: "green",
-        text: "watch done",
+    const checkpointed = await store.get_task("tsk_3")
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(checkpointed?.terminal_kind).toBeUndefined()
+    expect(checkpointed?.terminal_outbound_id).toBeUndefined()
+    expect(ui.list).toEqual([
+      {
+        kind: "reply",
+        out: render.intermediate({ text: "watch done" }),
       },
+    ])
+
+    await sweep(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      render,
+      opencode({
+        status: {},
+        result: {
+          state: "ok",
+          text: "watch done",
+          completed: true,
+        },
+      }),
+      (checkpointed?.updated_at ?? 0) + 1000,
+      1000,
+    )
+
+    const settled = await store.get_task("tsk_3")
+    expect(settled).toMatchObject({
+      status: "completed",
+      terminal_kind: "final",
+      terminal_outbound_id: "out_reply",
     })
+    expect(settled?.result_hash).toBe(checkpointed?.result_hash)
+    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "watch done" }))
   })
 
   test("re-patches stale waiting permission when remote is still busy", async () => {
@@ -269,7 +335,7 @@ describe("sweep", () => {
     )
 
     expect((await store.get_task("tsk_4"))?.status).toBe("waiting_permission")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         type: "approval",
@@ -306,7 +372,7 @@ describe("sweep", () => {
     )
 
     expect((await store.get_task("tsk_5"))?.status).toBe("failed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "red",
@@ -326,9 +392,11 @@ describe("sweep", () => {
       ...row("tsk_6", ses.session_id, "in_6", "waiting_attachment"),
       note: "等待补充说明",
     })
-    await store.save_pending({
+    await store.save_task_pending({
+      task_id: "tsk_6",
       session_id: ses.session_id,
-      inbound_id: "in_6",
+      origin_inbound_id: "in_6",
+      origin_message_id: "msg_in_6",
       assets: [
         {
           kind: "image",
@@ -356,11 +424,61 @@ describe("sweep", () => {
     )
 
     expect((await store.get_task("tsk_6"))?.status).toBe("waiting_attachment")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
         text: "长时间未继续输入，仍在等待你的补充说明。请再发一句你希望我做什么。",
+      },
+    })
+  })
+
+  test("fails stale waiting attachment when cached assets are unusable and clears pending", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const ses = session("ses_hold_bad")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_hold_bad"))
+    await store.save_task({
+      ...row("tsk_hold_bad", ses.session_id, "in_hold_bad", "waiting_attachment"),
+      note: "等待补充说明",
+    })
+    await store.save_task_pending({
+      task_id: "tsk_hold_bad",
+      session_id: ses.session_id,
+      origin_inbound_id: "in_hold_bad",
+      origin_message_id: "msg_in_hold_bad",
+      assets: [
+        {
+          kind: "image",
+          key: "img_hold_bad",
+          name: "broken.png",
+        },
+      ],
+      created_at: 1,
+      updated_at: 1,
+    })
+
+    await sweep(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      createRender(),
+      opencode({
+        status: {},
+      }),
+      60000,
+      1000,
+    )
+
+    expect((await store.get_task("tsk_hold_bad"))?.status).toBe("failed")
+    expect(await store.get_task_pending("tsk_hold_bad")).toBeNull()
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        template: "red",
       },
     })
   })
@@ -406,9 +524,11 @@ describe("sweep", () => {
       ...row("tsk_bg_hold", "ses_bg_hold", "in_bg_hold", "waiting_attachment"),
       note: "等待补充说明",
     })
-    await store.save_pending({
+    await store.save_task_pending({
+      task_id: "tsk_bg_hold",
       session_id: "ses_bg_hold",
-      inbound_id: "in_bg_hold",
+      origin_inbound_id: "in_bg_hold",
+      origin_message_id: "msg_in_bg_hold",
       assets: [
         {
           kind: "image",
@@ -439,10 +559,11 @@ describe("sweep", () => {
     expect(ui.list).toHaveLength(0)
   })
 
-  test("completed task is not finished again by later sweep", async () => {
+  test("resets checkpoint when sweep observes a different non-wait result before settling", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
+    const render = createRender()
     const ses = session("ses_chain_done")
     await store.save_session(ses)
     await store.save_inbound(inbound("in_chain_done"))
@@ -455,7 +576,7 @@ describe("sweep", () => {
       store,
       svc,
       ui.api,
-      createRender(),
+      render,
       opencode({
         status: {},
         last: "watch done once",
@@ -464,35 +585,72 @@ describe("sweep", () => {
       1000,
     )
 
+    const first = await store.get_task("tsk_chain_done")
+    expect(first?.status).toBe("running")
+    expect(typeof first?.result_hash).toBe("string")
+    expect(ui.list).toEqual([
+      {
+        kind: "reply",
+        out: render.intermediate({ text: "watch done once" }),
+      },
+    ])
+
     await sweep(
       cfg(),
       store,
       svc,
       ui.api,
-      createRender(),
+      render,
       opencode({
         status: {},
         last: "watch done twice",
       }),
-      120000,
+      (first?.updated_at ?? 0) + 1000,
       1000,
     )
 
-    expect((await store.get_task("tsk_chain_done"))?.status).toBe("completed")
-    expect(ui.list).toHaveLength(1)
-    expect(ui.list[0]?.out).toMatchObject({
-      kind: "card",
-      body: {
-        template: "green",
-        text: "watch done once",
-      },
+    const second = await store.get_task("tsk_chain_done")
+    expect(second?.status).toBe("running")
+    expect(typeof second?.result_hash).toBe("string")
+    expect(second?.result_hash).not.toBe(first?.result_hash)
+    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.intermediate({ text: "watch done twice" }))
+
+    await sweep(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      render,
+      opencode({
+        status: {},
+        result: {
+          state: "ok",
+          text: "watch done twice",
+          completed: true,
+        },
+      }),
+      (second?.updated_at ?? 0) + 1000,
+      1000,
+    )
+
+    const settled = await store.get_task("tsk_chain_done")
+    expect(settled).toMatchObject({
+      status: "completed",
+      terminal_kind: "final",
+      terminal_outbound_id: "out_reply",
     })
+    expect(settled?.result_hash).toBe(second?.result_hash)
+    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "watch done twice" }))
+
+    const history = await store.list_assistant_outbounds("tsk_chain_done")
+    expect(history.filter((item) => item.terminal && item.state === "emitted")).toHaveLength(1)
   })
 
-  test("watchdog does not add another terminal update after boot recovery already finished task", async () => {
+  test("watchdog emits a single terminal update after checkpointed completion and ignores later passes", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
+    const render = createRender()
     const ses = session("ses_boot_done")
     await store.save_session(ses)
     await store.save_inbound(inbound("in_boot_done"))
@@ -505,7 +663,7 @@ describe("sweep", () => {
       store,
       svc,
       ui.api,
-      createRender(),
+      render,
       opencode({
         status: {},
         last: "final after boot",
@@ -514,32 +672,70 @@ describe("sweep", () => {
       1000,
     )
 
-    const done = await store.get_task("tsk_boot_done")
-    expect(done?.status).toBe("completed")
+    const checkpointed = await store.get_task("tsk_boot_done")
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(ui.list).toEqual([
+      {
+        kind: "reply",
+        out: render.intermediate({ text: "final after boot" }),
+      },
+    ])
 
     await sweep(
       cfg(),
       store,
       svc,
       ui.api,
-      createRender(),
+      render,
+      opencode({
+        status: {},
+        result: {
+          state: "ok",
+          text: "final after boot",
+          completed: true,
+        },
+      }),
+      (checkpointed?.updated_at ?? 0) + 1000,
+      1000,
+    )
+
+    const settled = await store.get_task("tsk_boot_done")
+    expect(settled).toMatchObject({
+      status: "completed",
+      terminal_kind: "final",
+      terminal_outbound_id: "out_reply",
+    })
+    expect(settled?.result_hash).toBe(checkpointed?.result_hash)
+
+    await sweep(
+      cfg(),
+      store,
+      svc,
+      ui.api,
+      render,
       opencode({
         status: {},
         last: "final after second sweep",
       }),
-      120000,
+      (settled?.updated_at ?? 0) + 1000,
       1000,
     )
 
     expect((await store.get_task("tsk_boot_done"))?.status).toBe("completed")
-    expect(ui.list).toHaveLength(1)
-    expect(ui.list[0]?.out).toMatchObject({
-      kind: "card",
-      body: {
+    const history = await store.list_assistant_outbounds("tsk_boot_done")
+    const terminals = history.filter((item) => item.terminal && item.state === "emitted")
+    expect(terminals).toHaveLength(1)
+    expect(terminals[0]).toMatchObject({
+      feishu_message_id: "out_reply",
+      payload: expect.objectContaining({
         template: "green",
-        text: "final after boot",
-      },
+        state: "final",
+        title: "OpenCode",
+        text: "最终完成\n\nfinal after boot",
+      }),
     })
+    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "final after boot" }))
   })
 
   test("keeps stale running task alive when remote status probe fails", async () => {
@@ -567,7 +763,7 @@ describe("sweep", () => {
     )
 
     expect((await store.get_task("tsk_7"))?.status).toBe("running")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
@@ -609,7 +805,7 @@ describe("sweep", () => {
     )
 
     expect((await store.get_task("tsk_8"))?.status).toBe("running")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",
@@ -643,7 +839,7 @@ describe("sweep", () => {
     )
 
     expect((await store.get_task("tsk_9"))?.status).toBe("running")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "blue",

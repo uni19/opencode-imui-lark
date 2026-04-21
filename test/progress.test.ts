@@ -52,16 +52,48 @@ function row(id: string, session_id: string, inbound_id: string, status: Task["s
 }
 
 function tick() {
-  const list: Array<{ session_id: string; chat_id: string; out: RenderOut }> = []
+  const list: Array<{ session_id: string; chat_id: string; out: RenderOut; meta?: { kind: string; terminal?: boolean } }> = []
   return {
     list,
-    async push(session_id: string, chat_id: string, out: RenderOut) {
-      list.push({ session_id, chat_id, out })
+    async push(session_id: string, chat_id: string, out: RenderOut, meta?: { kind: string; terminal?: boolean }) {
+      list.push({ session_id, chat_id, out, meta })
     },
   }
 }
 
 describe("on_progress", () => {
+  async function seedWait(store: ReturnType<typeof createMemoryStore>, input: {
+    task_id: string
+    session_id: string
+    inbound_id: string
+    status: Task["status"]
+    req: string
+    kind: "approval" | "question"
+    payload: Record<string, unknown>
+  }) {
+    await store.save_task({
+      ...row(input.task_id, input.session_id, input.inbound_id, input.status),
+      req_type: input.kind === "approval" ? "permission" : "question",
+      req: input.req,
+      req_id: input.req,
+    })
+    await store.save_assistant_outbound({
+      id: `aso_${input.task_id}`,
+      task_id: input.task_id,
+      session_id: input.session_id,
+      seq: 1,
+      kind: input.kind,
+      action: "reply",
+      state: "open",
+      origin_inbound_id: input.inbound_id,
+      origin_message_id: `msg_${input.inbound_id}`,
+      req_key: input.req,
+      terminal: false,
+      payload: input.payload,
+      created_at: 1,
+      updated_at: 1,
+    })
+  }
   test("dedups repeated busy status for same task", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
@@ -95,6 +127,9 @@ describe("on_progress", () => {
             template: "blue",
             text: "正在处理，请稍候…",
           },
+        },
+        meta: {
+          kind: "progress",
         },
       },
     ])
@@ -193,14 +228,18 @@ describe("on_progress", () => {
     const ses = session("ses_wait_perm")
     await store.save_session(ses)
     await store.save_inbound(inbound("in_wait_perm_1"))
-    await store.save_task({
-      ...row("tsk_wait_perm_1", ses.session_id, "in_wait_perm_1", "waiting_permission"),
-      req_type: "permission",
+    await seedWait(store, {
+      task_id: "tsk_wait_perm_1",
+      session_id: ses.session_id,
+      inbound_id: "in_wait_perm_1",
+      status: "waiting_permission",
       req: "req_wait_perm_1",
-      note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/etc" }))}`,
+      kind: "approval",
+      payload: {
+        tool: "external_directory",
+        detail: JSON.stringify({ filepath: "/etc" }),
+      },
     })
-    await store.save_inbound(inbound("in_wait_perm_2"))
-    await store.save_task(row("tsk_wait_perm_2", ses.session_id, "in_wait_perm_2", "running"))
 
     const handled = await on_progress(store, task, render, push, {
       type: "message.part.updated",
@@ -235,14 +274,19 @@ describe("on_progress", () => {
     const ses = session("ses_wait_q")
     await store.save_session(ses)
     await store.save_inbound(inbound("in_wait_q_1"))
-    await store.save_task({
-      ...row("tsk_wait_q_1", ses.session_id, "in_wait_q_1", "waiting_question"),
-      req_type: "question",
+    await seedWait(store, {
+      task_id: "tsk_wait_q_1",
+      session_id: ses.session_id,
+      inbound_id: "in_wait_q_1",
+      status: "waiting_question",
       req: "req_wait_q_1",
-      note: `question:0:${encodeURIComponent("先选目录")}:${encodeURIComponent("/etc")}|${encodeURIComponent("/tmp")}`,
+      kind: "question",
+      payload: {
+        title: "先选目录",
+        opts: ["/etc", "/tmp"],
+        custom: false,
+      },
     })
-    await store.save_inbound(inbound("in_wait_q_2"))
-    await store.save_task(row("tsk_wait_q_2", ses.session_id, "in_wait_q_2", "running"))
 
     const handled = await on_progress(store, task, render, push, {
       type: "message.updated",

@@ -1,6 +1,7 @@
+/// <reference types="bun-types" />
 import { describe, expect, test } from "bun:test"
 import { dispatch_event } from "../src/app/boot.ts"
-import type { FeishuApi, ImSession, InboundMessage, OpencodeEvent, OpencodeSvc, RenderOut, Task } from "../src/contracts.ts"
+import type { FeishuApi, ImSession, InboundMessage, OpencodeEvent, OpencodeResult, OpencodeSvc, RenderOut, Task } from "../src/contracts.ts"
 import { createTaskSvc } from "../src/gateway/task.ts"
 import { createRender } from "../src/render/text.ts"
 import { createMemoryStore } from "../src/storage/db.ts"
@@ -81,7 +82,7 @@ function feishu(order: string[]) {
   }
 }
 
-function opencode(last?: string) {
+function opencode(last?: string, result?: OpencodeResult) {
   return {
     async ensure() {
       return { id: "ses_1" }
@@ -121,16 +122,19 @@ function opencode(last?: string) {
     async last() {
       return last
     },
+    async result() {
+      return result ?? (last ? { state: "ok", text: last } : { state: "empty" })
+    },
   } satisfies OpencodeSvc
 }
 
 function tick(order: string[]) {
-  const list: Array<{ session_id: string; chat_id: string; out: RenderOut }> = []
+  const list: Array<{ session_id: string; chat_id: string; out: RenderOut; meta?: { kind: string; terminal?: boolean } }> = []
   return {
     list,
-    async push(session_id: string, chat_id: string, out: RenderOut) {
+    async push(session_id: string, chat_id: string, out: RenderOut, meta?: { kind: string; terminal?: boolean }) {
       order.push("push")
-      list.push({ session_id, chat_id, out })
+      list.push({ session_id, chat_id, out, meta })
     },
     async flush(session_id: string) {
       order.push(`flush:${session_id}`)
@@ -139,7 +143,7 @@ function tick(order: string[]) {
 }
 
 describe("dispatch_event", () => {
-  test("flushes progress before final idle event", async () => {
+  test("flushes progress before repeated idle settlement", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
     const render = createRender()
@@ -171,15 +175,45 @@ describe("dispatch_event", () => {
       },
     } satisfies OpencodeEvent)
 
+    const checkpointed = await store.get_task("tsk_1")
     expect(order).toEqual(["push", `flush:${ses.session_id}`, "reply"])
-    expect((await store.get_task("tsk_1"))?.status).toBe("completed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
-      kind: "card",
-      body: {
-        template: "green",
-        text: "done",
+    expect(checkpointed?.status).toBe("running")
+    expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(ui.list).toEqual([
+      {
+        kind: "reply",
+        out: render.intermediate({ text: "done" }),
       },
-    })
+    ])
+
+    await dispatch_event(
+      store,
+      task,
+      ui.api,
+      render,
+      opencode(undefined, {
+        state: "ok",
+        text: "done",
+        completed: true,
+      }),
+      stream,
+      {
+        type: "session.status",
+        properties: {
+          sessionID: ses.session_id,
+          status: {
+            type: "idle",
+          },
+        },
+      } satisfies OpencodeEvent,
+    )
+
+    expect(order[0]).toBe("push")
+    expect(order).toContain(`flush:${ses.session_id}`)
+    expect(order.indexOf(`flush:${ses.session_id}`)).toBeLessThan(order.indexOf("reply"))
+    expect(order.filter((item) => item === "reply")).toHaveLength(2)
+    expect((await store.get_task("tsk_1"))?.status).toBe("completed")
+    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "done" }))
   })
 
   test("flushes progress before session error event", async () => {
@@ -220,13 +254,13 @@ describe("dispatch_event", () => {
 
     expect(order).toEqual(["push", `flush:${ses.session_id}`, "reply"])
     expect((await store.get_task("tsk_2"))?.status).toBe("failed")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         template: "red",
       },
     })
-    const text = ((ui.list.at(-1)?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    const text = ((ui.list[ui.list.length - 1]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
     expect(text).toContain("出错了：BrokenPipe")
     expect(text).toContain("建议：可稍后重试；若仍失败，请重新发送上一条消息。")
   })
@@ -278,7 +312,7 @@ describe("dispatch_event", () => {
 
     expect(order).toEqual(["push", `flush:${ses.session_id}`, "reply"])
     expect((await store.get_task("tsk_3"))?.status).toBe("waiting_permission")
-    expect(ui.list.at(-1)?.out).toMatchObject({
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         type: "approval",
