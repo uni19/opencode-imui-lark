@@ -1,217 +1,150 @@
-# 04 API Contracts
+# 04 API 合约
 
-## Feishu 侧接入方式
+## 文档状态
 
-飞书侧不再通过公网 webhook 推送请求，而是通过长连接把事件和新版卡片交互发送给本地或内网 Gateway Runtime。
+本文描述 OMO 目标合约，而不是当前代码已经完整提供的接口清单。现有外部 OpenCode / Feishu API 基本不变，主要变化发生在 Gateway 内部语义、存储模型和 runtime 对 `idle` 的解释方式上。
 
-因此接口分成两层：
+## 外部合约
 
-- 飞书长连接输入接口
-- OpenCode HTTP / SSE 输出接口
+### 1. Feishu 输入仍然走长连接
 
-## OpenCode 侧接口
+Feishu 侧不通过公网 webhook 直接推请求，而是通过长连接把消息事件和新卡片交互发送给本地或内网 Gateway Runtime。
 
-优先使用 `@opencode-ai/sdk/v2` 封装，必要时再直接调用 HTTP。
+这条约束不变：
 
-## 1. 创建会话
+- 快速 ack
+- 入站先落幂等 / 队列
+- 不在回调线程里同步执行 OpenCode
 
-用途：
+### 2. OpenCode 会话接口保持原子调用
 
-- 新对话开始时创建 OpenCode session
-- 可在创建时注入更保守的 permission 规则
-
-建议调用：
+目标设计不要求改 OpenCode 原子接口，仍然围绕这些调用组织：
 
 ```ts
-client.session.create({
-  body: {
-    title,
-    permission,
-    workspaceID,
-  },
-})
+client.session.create({ body: { title, permission, workspaceID } })
+client.session.promptAsync({ sessionID, parts, agent, model, system })
+client.permission.reply({ requestID, reply, message })
+client.question.reply({ requestID, answers })
+client.question.reject({ requestID })
+client.session.abort({ sessionID })
 ```
 
-说明：
+变化点不在参数形状，而在调用时机：
 
-- `workspaceID` 是 OpenCode 的逻辑工作区 ID，不是目录路径
-- 如果只是在本机某个 repo 里运行，一般更常见的是传 `directory`
-- 当服务端已经配置了 workspace 路由时，再由调用方显式传入 `workspaceID`
+- 新普通 prompt 遇到 live 非等待 task 时，必须先 `SessionSvc.reset(...)` 到 fresh session，再 `promptAsync`
+- 权限、问题、附件补充文本回复的目标永远是同一个 task，而不是新建 task
 
-## 2. 异步发送消息
+### 3. Event Bridge 的语义需要重写
 
-用途：
+Gateway 仍然消费 OpenCode `/event` 或 `/global/event`，但语义改成：
 
-- 作为 IM 主入口
-- 立即返回，后续依赖事件流回推
+- `message.*` 负责产出非终态 outbound
+- `permission.asked` / `question.asked` 负责挂 wait outbound
+- `session.status=idle` 只触发 checkpoint / reconciliation
+- `session.error` 只在 task 尚未 terminal 时产出唯一 terminal error
 
-建议调用：
+关键约束：`session.status=idle` 不能再直接等价为 `task.done()`。
 
-```ts
-client.session.promptAsync({
-  sessionID,
-  parts: [{ type: "text", text }],
-  agent,
-  model,
-  system,
-})
-```
+## Gateway 内部服务合约
 
-对于图片或文件输入，可改为：
-
-```ts
-client.session.promptAsync({
-  sessionID,
-  parts: [
-    { type: "text", text: "请看看这个附件" },
-    { type: "file", url, mime, filename },
-  ],
-})
-```
-
-## 3. 订阅事件
-
-两种模式：
-
-- 单实例或单 repo 优先 `/event`
-- 聚合多个目录时可用 `/global/event`
-
-建议封装成：
-
-```ts
-subscribeEvents({
-  directory,
-  workspace,
-  onEvent,
-})
-```
-
-说明：
-
-- `directory` 和 `workspace` 只需命中其中一种路由上下文即可
-- 对多实例或远端工作区场景，优先用 `workspace`
-- 对单目录本地开发场景，优先用 `directory`
-
-## 4. 响应权限
-
-用途：
-
-- 用户在飞书卡片上审批工具调用
-
-建议调用：
-
-```ts
-client.permission.reply({
-  requestID,
-  reply: "once" | "always" | "reject",
-  message,
-})
-```
-
-## 5. 响应问题
-
-用途：
-
-- 用户在飞书里回答选择题或补充信息
-
-建议调用：
-
-```ts
-client.question.reply({
-  requestID,
-  answers,
-})
-```
-
-拒绝时：
-
-```ts
-client.question.reject({
-  requestID,
-})
-```
-
-## 6. 取消会话
-
-用途：
-
-- 用户主动发送 `/abort`
-
-建议调用：
-
-```ts
-client.session.abort({
-  sessionID,
-})
-```
-
-## Gateway 内部接口
-
-建议把飞书接入层和领域层拆开，内部提供一组稳定服务。
-
-## 1. FeishuConnService
-
-```ts
-type FeishuConnService = {
-  onEvent(input: InboundEnvelope): Promise<{ ok: true }>
-  start(): Promise<void>
-  stop(): Promise<void>
-}
-```
-
-职责：
-
-- 接收飞书长连接事件
-- 做最小校验和幂等
-- 快速入队并确认
-
-## 2. IngestService
-
-```ts
-type IngestService = {
-  onMessage(input: InboundMessage): Promise<void>
-  onCardAction(input: CardAction): Promise<void>
-}
-```
-
-## 3. SessionService
+### 1. SessionService
 
 ```ts
 type SessionService = {
   resolve(input: ResolveInput): Promise<ResolvedSession>
   reset(input: ResetInput): Promise<ResolvedSession>
+  switch(input: SwitchInput): Promise<ResolvedSession>
   bindRepo(input: BindRepoInput): Promise<void>
 }
 ```
 
-## 4. TaskService
+约束：
+
+- `resolve` 只回答“当前前台该去哪个 session”
+- `reset` 用于 `/new` 和 superseding prompt 的 fresh-session rotation
+- `switch` 用于切回已有 session 并触发等待态 replay
+
+### 2. TaskService
 
 ```ts
 type TaskService = {
-  enqueue(input: StartTaskInput): Promise<TaskRecord>
+  create(input: StartTaskInput): Promise<Task>
   markAcked(id: string): Promise<void>
   markRunning(id: string): Promise<void>
-  markWaitingPermission(id: string, requestID: string): Promise<void>
-  markWaitingQuestion(id: string, requestID: string): Promise<void>
-  markCompleted(id: string): Promise<void>
-  markFailed(id: string, err: string): Promise<void>
+  markWait(id: string, wait: WaitState): Promise<void>
+  checkpointIdle(id: string, resultHash?: string): Promise<void>
+  linkVisibleSlot(input: { id: string; outbound_id: string }): Promise<void>
+  closeTerminal(input: {
+    id: string
+    status: "completed" | "failed" | "aborted"
+    terminal_kind: "final" | "error" | "aborted"
+    terminal_outbound_id?: string
+    result_hash?: string
+    error?: string
+  }): Promise<boolean>
+  supersede(input: { id: string; superseded_by_task_id: string }): Promise<void>
 }
 ```
 
-## 5. RenderService
+约束：
+
+- `checkpointIdle` 不得直接把 task 置成 `completed`
+- `closeTerminal(...)` 需要做 terminal 幂等保护；已经 terminal 的 task 再次 close 必须返回 no-op
+- `markWait(...)` 只更新当前 head wait 的可见状态，不承担完整 wait 历史
+
+### 3. AssistantOutboundStore
+
+```ts
+type AssistantOutboundStore = {
+  append(outbound: AssistantOutbound): Promise<void>
+  listByTask(task_id: string): Promise<AssistantOutbound[]>
+  listOpenWaits(task_id: string): Promise<AssistantOutbound[]>
+  headWait(task_id: string): Promise<AssistantOutbound | undefined>
+  getVisibleSlot(task_id: string): Promise<VisibleOutboundMirror | undefined>
+}
+```
+
+约束：
+
+- `append(...)` 是目标真相写入点
+- `getVisibleSlot(...)` 只是兼容窗口里的前台 patch 指针
+- patch fallback 不能抹掉旧 outbound 历史，只能新追加 child outbound 并推进 visible slot
+
+### 4. PendingAttachmentStore
+
+```ts
+type PendingAttachmentStore = {
+  save(pending: PendingAttachment): Promise<void>
+  get(task_id: string): Promise<PendingAttachment | undefined>
+  drop(task_id: string): Promise<void>
+}
+```
+
+约束：
+
+- 归属键是 `task_id`
+- 如需兼容老库里的 `pending_attachment(session_id)`，只能 lazy migrate，不能继续把 session-owned 结构当目标模型
+
+### 5. RenderService
 
 ```ts
 type RenderService = {
-  ack(input: AckRenderInput): Promise<OutboundMessage>
-  progress(input: ProgressRenderInput): Promise<void>
-  approval(input: ApprovalRenderInput): Promise<OutboundMessage>
-  question(input: QuestionRenderInput): Promise<OutboundMessage>
-  final(input: FinalRenderInput): Promise<void>
-  error(input: ErrorRenderInput): Promise<void>
+  ack(input: AckRenderInput): RenderOut
+  progress(input: ProgressRenderInput): RenderOut
+  approval(input: ApprovalRenderInput): RenderOut
+  question(input: QuestionRenderInput): RenderOut
+  intermediate(input: IntermediateRenderInput): RenderOut
+  final(input: FinalRenderInput): RenderOut
+  error(input: ErrorRenderInput): RenderOut
 }
 ```
 
-## 6. FeishuApiService
+约束：
+
+- `RenderOut` 仍然是一条原子消息 payload，不扩成数组 API
+- intermediate 与 final 必须显式区分，不能都用“绿色完成卡”但不给终态标识
+
+### 6. FeishuApiService
 
 ```ts
 type FeishuApiService = {
@@ -221,150 +154,78 @@ type FeishuApiService = {
 }
 ```
 
-职责：
+约束：
 
-- 作为飞书出站能力统一封装
-- 不暴露底层 HTTP 细节给业务层
+- 外部 Feishu API 仍然是一条消息一次 send/reply/patch
+- fan-out 逻辑留在 `boot.ts` / runtime，不把 Feishu API 包装成“批量多消息”接口
 
-## 长连接输入约束
+## 存储合约
 
-### 快速确认
+### 1. `im_session`
 
-飞书长连接收到事件后，`FeishuConnService.onEvent()` 只做以下事情：
+保存 Feishu thread 到 foreground OpenCode session 的映射。
 
-1. 解析事件
-2. 校验是否支持
-3. 去重
-4. 投递异步任务
-5. 返回确认
+### 2. `task`
 
-不在这一层直接调用 OpenCode。
+除现有字段外，目标模型新增或强化这些字段：
 
-### 支持的输入事件
+- `reply_anchor_message_id`
+- `result_hash`
+- `terminal_kind`
+- `terminal_outbound_id`
+- `superseded_by_task_id`
+- `outbound_id`（兼容窗口保留）
 
-首版建议最小事件集：
+### 3. `assistant_outbound`
 
-- `im.message.receive_v1`
-
-### 不支持的输入协议
-
-- 旧版卡片回传协议
-- 依赖公网 webhook 的开发者服务器回调模式
-
-## 存储表建议
-
-## 1. im_sessions
-
-- 用于映射飞书上下文和 OpenCode session
-
-字段：
-
-- `id`
-- `platform`
-- `tenant_id`
-- `chat_id`
-- `thread_id`
-- `root_message_id`
-- `session_id`
-- `directory`
-- `workspace_id`
-- `state`
-- `created_at`
-- `updated_at`
-
-## 2. im_tasks
-
-- 一条用户输入对应一条任务
-
-字段：
-
-- `id`
-- `im_session_id`
-- `session_id`
-- `inbound_message_id`
-- `status`
-- `waiting_request_type`
-- `waiting_request_id`
-- `error`
-- `created_at`
-- `updated_at`
-
-## 3. outbound_messages
-
-- 保存飞书发出的消息和卡片
-
-字段：
+目标表建议至少包含：
 
 - `id`
 - `task_id`
-- `feishu_message_id`
+- `session_id`
+- `seq`
 - `kind`
+- `action` (`reply | patch | deferred`)
+- `origin_inbound_id`
+- `origin_message_id`
+- `req_key`
+- `terminal`
+- `feishu_message_id`
 - `payload_json`
 - `created_at`
 - `updated_at`
 
-## 4. idempotency_keys
+### 4. `outbound_message`
 
-- 处理飞书事件重试
+迁移期继续保留，作为当前 visible slot 的 compat mirror，不再承担完整历史账本职责。
 
-字段：
+### 5. `pending_attachment_task`
 
-- `key`
-- `source`
-- `channel`
-- `expired_at`
+目标表建议至少包含：
 
-## 5. event_offsets
-
-- 如果事件桥后续切换成队列或自定义游标，可保留扩展
-
-## 6. conn_state
-
-- 保存长连接运行状态
-
-字段：
-
-- `name`
-- `status`
+- `task_id`（主键）
+- `session_id`（可选冗余字段，便于恢复和兼容迁移）
+- `origin_inbound_id`
+- `origin_message_id`
+- `data_json`
+- `created_at`
 - `updated_at`
-- `err`
 
-## 飞书卡片建议
+### 6. `seen_event` / `queue_job` / `conn_state`
 
-首版至少需要三种卡片：
+这几张表继续承担：
 
-### 审批卡片
+- 事件幂等
+- 队列恢复
+- 连接状态观测
 
-展示：
+它们不需要为 OMO 语义重写，但必须继续配合 terminal idempotency、wait replay 和 reconnect throttling。
 
-- 工具名
-- 风险说明
-- `1 / 2 / 3` 序号提示
+## 必须成立的关键合约
 
-### 问题卡片
-
-支持：
-
-- 单选序号回复
-- 多选序号回复
-- 自定义文本输入
-
-### 结果卡片
-
-展示：
-
-- 执行摘要
-- agent/model
-- repo
-- 状态
-- 可选的 diff 摘要
-
-## 推荐封装边界
-
-为了避免飞书和 OpenCode 两侧协议耦合过深，建议边界如下：
-
-- `adapter/feishu`: 只处理飞书长连接和飞书 API
-- `gateway/`: 只处理业务编排
-- `opencode/`: 只处理 OpenCode SDK 和事件桥
-- `render/`: 只处理消息和卡片渲染
-- `storage/`: 只处理状态持久化
+- `session.status=idle` 单独出现时不能完成 task
+- 一个 task 最多只有一个 terminal outbound
+- 每个 outbound 都必须带 `origin_inbound_id + origin_message_id`
+- `store.get_outbound(task_id)` 在兼容窗口里仍然返回当前 visible slot
+- patch fallback 必须保留 outbound 历史，而不是覆盖它
+- 多个开放 user turn 不能共享一个 OpenCode `session_id`
