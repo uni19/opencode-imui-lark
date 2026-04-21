@@ -1,419 +1,199 @@
-# 06 Delivery Plan
+# 06 交付计划
 
-## 当前实现状态
+## 文档状态
 
-当前代码已经从“方案骨架”进入了“可联调 MVP”阶段，主链功能已通，下一步重点不再是补大块新能力，而是把稳定性、恢复和用户体验打磨到可持续使用。
+本文替换旧的“后 MVP 打磨阶段”叙事，改成当前 OMO 迁移的真实分阶段计划。目标不是宣称新模型已经交付，而是把文档、模型、runtime、测试按正确顺序推进到位。
 
-### 已完成
+## 目标
 
-- 飞书长连接接入可用
-- `stdin` 本地联调链路可用
-- OpenCode `prompt_async` 和 `/global/event` 已接通
-- 单消息卡片更新链路已接通
-- SQLite 持久化已接入运行链路
-- `outbound_message`、`attachment`、`pending_attachment` 已真正落盘并被运行链路消费
-- 图片、文件、`post` 富文本、多图、图文混排已可进入 OpenCode `parts`
-- 附件-only 输入已支持“等待补充说明”
-- 权限审批和问题回问主链已接通，当前稳定方案为“卡片展示 + 文本回复”
-- 权限审批只用数字序号 `1 / 2 / 3` 进行选择；若直接发送其他文本，则视为“更正当前操作并继续执行”
-- 问题回问在有选项时优先使用数字序号；如问题允许自定义回答，也可直接回复文本
-- 群聊 `@bot`、thread 路由、当前会话 / 聊天默认 / 用户默认 repo 绑定已接通
-- `workspace` 绑定语义和命令解析已接通
-- `session` 和 `model` 的查看 / 切换命令已接通
-- IM 原生命令与 OpenCode slash 桥接已接通
-- Phase 9 已开始落地：入站消息队列改为持久化 job，进程启动时会回收并重放未完成 job
-- 卡片更新链路已补第一层降级：`patch` 失败时会退化为新回复 / 新消息，而不是直接中断更新链路
-- 长耗时任务已补第一层 watchdog：长时间无新进展时，会主动提示可用 `/status` / `/abort`
-- 长耗时任务 watchdog 已补第二层对账：对长期无事件任务会主动查询 OpenCode 状态，继续同步、自动收尾或明确失败
-- 飞书消息长连接的 `reconnecting / ready / error` 已开始接入活跃任务提示，不再完全静默
-- OpenCode SSE 已补 `error -> reconnecting` 显式状态推进，异常不再只有后台日志
-- `session.status=idle` 但无最终文本输出时，已补完成兜底提示，避免卡在“处理中”
-- 常见网络 / 证书 / 超时 / 认证错误已开始统一映射为用户可读提示，不再大面积直接透传原始报错
-- OpenCode HTTP 错误已补响应体透传，模型限流、上下文过长、模型不可用、服务异常等分级开始可见
-- 附件下载失败已细分到飞书资源错误，并会尽量带上具体附件名
-- provider 常见错误模式已开始细分，包括限流、额度不足、模型繁忙等场景
-- 连接类提示已补轻量 cooldown，任务刚有新进展时不会再立刻被重复连接提示刷屏
-- SQLite store 落盘级集成测试已补：session 映射、任务 / 出站 / 附件 / pending / seen / conn / queue_job 的跨重启 roundtrip 已有回归
-- `waiting_permission / waiting_question` 的跨重启恢复分支已补回归
-- 迟到事件保护已开始收紧：已完成 / 已失败 / 已中止任务不会再被迟到的权限、错误、完成事件污染状态
-- 进度卡片去重已升级为 payload 级比较，不再只按 `text` 判重，`step` 更新不会被误吞
-- `waiting_attachment` 恢复已补附件可用性检查：缓存残缺时会明确失败，而不是继续停在等待态
-- 带附件的 prompt 已补轻量回答约束：会明确要求模型直接基于附件回答，不要把内部工具调用、缓存路径或系统注入文本当作最终答案
-- 带附件的 prompt 已补附件概览和顺序提示，多图 / 多文件场景下会把附件顺序显式告诉模型，帮助理解“这张 / 第 N 个附件 / 这些文件”之类指代
-- 最终回复抓取已开始优先选择“最近一个真正有文本输出的 assistant 消息”，降低收尾拿到空壳 assistant 消息的概率
-- 最终回复抓取已进一步收紧：会优先选择“已完成且无错误”的 assistant 文本，降低把流式半成品或异常态残留文本误发给飞书的概率
-- 最终回复抓取已排除 `summary assistant`，内部 compaction / 总结消息不会再误抢到正常用户答复前面
-- 完成链路已开始区分“真的没有文本输出”和“只有内部 / 总结文本被过滤掉”，前者仍按无结果处理，后者会给出更明确的用户提示
-- `waiting_attachment` 的用户提示已补“新收到多少 / 当前累计多少”，多轮补图补文件时不会只看到模糊的“又收到附件”
-- 已补 `waiting_attachment` 主链回归：附件-only -> 继续补附件 -> 最后补一句说明 -> 合并送入 OpenCode 的多轮流转已有自动化测试
-- 已补 `waiting_attachment` 的空白 follow-up、`/abort`、`/new` 收敛回归，等待态不再只靠手工验证
-- task 已开始持久化运行 `directory/workspace` scope，`recover / sweep / signal / queue fail` 不再完全依赖当前 session 映射
-- 聊天切换到新会话后，旧任务即使失去 session 映射，也能依靠 task scope + 原始 inbound 回落继续收尾或报错
-- OpenCode 事件已开始补持久化幂等 key：`permission.asked`、`question.asked`、关键进度事件和最终态事件会抑制 replay 重复推进
-- 幂等策略已支持“同 req 同 payload 去重、同 req 内容更新继续 patch”，不会把合法更新误判成重复事件
-- 实时进度分支已抽成可测 helper，`busy / retry / message.updated / message.part.updated` 的 replay 去重已有回归
-- 活跃任务在 `/status`、新消息入口和 slash 入口前会先做一次主动探测：若远端已结束则自动收尾 / 明确失败，不再长期卡在陈旧 `running`
-- `/status` 已开始展示连接状态、最近进展、最近更新时间和下一步建议，不再只返回裸状态名
-- 运行中进度摘要已开始回写到 `task.note`，便于 `/status` 和恢复链路读取最近可见进展
-- 连接异常、恢复中、恢复后同步、watchdog 保活等提示文案已开始统一收敛，`/status` 的下一步建议也会结合当前连接状态给出更具体提示
-- 飞书消息连接从 `reconnecting / error` 恢复到 `ready` 后，已补轻量 `resume`：等待态提示 / 问题卡片会重发，active task 会主动再探测，不再只停在一条泛化的“连接已恢复”
-- watchdog 已开始覆盖等待态：长期无事件的 `waiting_permission / waiting_question / waiting_attachment` 会主动重发提示、继续对账或明确失败，不再只能等连接恢复时被动同步
-- `recover / sweep` 已开始区分“远端状态查询失败”和“远端确认空闲”：瞬时探测失败不会再把运行中任务、等待审批或等待问题误判成已结束
-- `resume` 已开始统一到同一套语义：message reconnect 后会先探测远端状态，再决定重贴等待卡片、继续同步，还是明确判定旧审批 / 旧问题已失效
-- OpenCode SSE 连接状态已补重试次数和退避时间：`/status` 不再只有裸的 `reconnecting`，而会显示第几次重连、约多久后再试
-- 飞书长连接状态也已补 reconnect attempt 可见性：`/status` 可以看到 message 侧是否正在连续重连
-- 连接抖动提示已开始收敛：`error -> reconnecting` 的单次失败周期只会对活跃任务发一条主提示，避免连续两条连接卡片刷屏
-- 重复 `reconnecting -> reconnecting` 状态已不再重复通知，OpenCode SSE 在同一重试阶段内不会继续刷连接卡片
-- 若同一 `reconnecting` 阶段内错误原因或重试次数发生实质变化，会立即更新现有连接提示；恢复后再次抖动也不会被旧 cooldown 吞掉
-- 上述抖动提示语义已同时覆盖 OpenCode SSE 和飞书长连接：message/opencode 两侧都已补“原因变化即时更新、恢复后再次抖动重新提示”的回归
-- `resume` 的 active task 分支已补齐到和 `recover / sweep` 同一口径：message reconnect 后，`queued / acked / running` 会按“继续同步 / 明确失败 / 自动收尾 / 状态未知先保活”统一处理
-- OpenCode 在首次 `connecting -> ready` 时也会主动触发恢复：boot 期间若第一次 `recover()` 因服务尚未 ready 只能先保活，后续真正 ready 后会再跑一轮恢复，而不是只能等 watchdog
-- boot 阶段若 OpenCode 连接状态尚未落盘，恢复提示也会先收敛成“OpenCode 正在建立连接，稍后继续同步”，后续 `connecting -> ready` 会在同一条进度卡片上继续向前 patch，减少“服务已恢复”这类过早结论
-- watchdog 进入“状态未知”分支时也已开始感知 OpenCode 当前连接态：若正在 connecting / reconnecting / error，会优先展示连接建立或重连中的提示，而不是一律退回“长时间无新事件”
-- `boot.ts` 中纯文案、状态展示、错误映射 helper 已开始拆到 `src/app/text.ts`，在不改状态机语义的前提下，主文件复杂度和后续交接成本已下降一层
-- 通用运行时错误提示已开始区分“可稍后重试”和“需要重发附件 / 重发上一条消息”，主链 `render.err` 已接入带建议的用户提示
-- 已补最小自动化回归：命令解析、持久化队列恢复 / 去重 / 重试、消息入口去重入队、`recover()` 关键分支、`waiting_permission / waiting_question / waiting_attachment` 恢复、`on_event()` 的审批 / 问题 / 完成态推进、迟到事件保护、OpenCode SSE 连接失败状态推进、watchdog 远端状态对账、payload 级卡片去重、错误映射与连接提示节流、模型 / 附件错误分级、SQLite 落盘集成测试、富文本 / 附件解析、等待态数字序号语义、`patch` 降级为 reply/send
-- 发布硬化已开始落地：启动前配置体检、附件缓存 TTL / 容量清理、SQLite 备份 / 迁移命令、最小 scope 与运维文档已接入发布链
-- 安装包自动烟测已接入：发布门禁已从“可 build”推进到“可 build + 可 install + 可 uninstall”
-- 后台会话切换首版已落地：`/session` 与 `/new` 不再默认中止旧 live task，后台 `waiting_permission / waiting_question / waiting_attachment` 会延迟到切回 session 时再显示
-- `/sessions` 已开始叠加本地 task 状态，后台等待态不再完全不可见
+本轮交付需要同时达成：
 
-### 当前主要缺口
+- 一个用户轮次可以对应多个助手 outbound
+- `idle` 不再被当成直接完成
+- IMUI 可以展示多次“完成态”卡片，但必须区分中间态与最终态
+- 回复消息始终能对应到 originating user turn
+- 后台 session 切换、deferred wait replay、attachment-only hold、reconnect/watch throttling、Feishu reply threading 都继续成立
+- 新普通 prompt 可以在旧 task 后台继续执行时创建新的前台 turn
 
-- 后台会话切换的首版语义已经接通，但 `/status` 仍然主要是当前 session 视角，后台等待态的可见性和手工回归还可以继续增强
-- 当前实现仍保持 session 级操作，不支持 task 级寻址；这符合首版范围，但如果后续要做更强并行体验，需要额外设计
-- 飞书长连接、OpenCode SSE、后台队列还缺少完整的重连、恢复和幂等补齐
-- 当前队列恢复还是“消息入站级恢复”，尚未做到 OpenCode 执行中任务的完整续跑
-- 重启后的恢复语义仍不完整，尤其是长耗时任务、等待态任务和迟到事件的恢复
-- 请求失败、网络异常、下载失败、模型错误等还缺少更系统的用户提示
-- 请求失败和网络异常已开始做统一映射，模型侧错误分级、附件异常细分、SQLite 落盘回归、迟到事件保护、task scope 恢复、OpenCode 事件基础幂等和 `waiting_attachment` 基础恢复都已起步，但更多 provider 特定报错和更细的事件幂等仍待继续收紧
-- 长耗时任务的“处理中体验”已有基础 watchdog，但仍缺少更细的超时、卡住、恢复后的提示策略
-- 长耗时任务已有基础 watchdog 和远端状态对账，但超时阈值、失败分级、提示节流仍可继续收紧
-- 连接状态提示已有第一层接入，但提示文案和节流策略仍可继续收紧
-- `/session`、`/model`、`/repo`、`/workspace` 的组合切换还需要更多飞书实链回归
-- 多模态回复质量和更复杂的附件交互仍待继续打磨
-- 自动化测试仍然偏薄，缺少稳定回归保障
-- 自动化测试已起步，但覆盖面仍以解析 / 队列 / 恢复 / 事件推进 / 投递降级为主，离主链全覆盖还有距离
+## 固定约束
 
-## 下一阶段优先级
+- `Task` 继续存在，但重新定义为 originating user turn
+- 新增 `assistant_outbound` 作为 1:N 子账本
+- `task.outbound_id + outbound_message` 暂时保留为 visible-slot compat pointer
+- `pending_attachment` 从 `session_id` 迁到 `task_id`
+- 多个开放 user turn 不能共享一个 OpenCode `session_id`
+- 同一前台 thread 同时只允许一个可见 wait
+- `bun test` 与 `tsc --noEmit` 是最终回归门槛
 
-### P1: 稳定性与恢复
+## 非目标
 
-- 当前下一刀：连接抖动提示、boot 初次恢复文案、ready 后主动恢复和 watchdog 的未知状态提示已基本补齐，下一步继续推进“重启后的 active task 恢复”，重点看 boot 后 queued/running 任务在首次恢复、后续 watchdog、用户侧提示之间的衔接
-- 第一步：落 `queue_job` 持久化，补进程重启后的入站消息重放
-- 第二步：把 `recover` 从“安全失败”推进到“可恢复则继续、不可恢复则明确失败”
-- 飞书长连接自动重连与退避
-- OpenCode SSE 自动重连与重订阅
-- 队列恢复、幂等回放、迟到事件保护
-- 进程重启后的等待态恢复与任务状态恢复
+- 不承诺“同一 thread 同时可见多个 waiting 卡片”
+- 不把 Feishu API 改造成批量多消息接口
+- 不先删兼容表再做迁移
+- 不把当前文档写成“功能已全部上线”的假状态
 
-### P2: 失败通知与长耗时体验
+## Phase 1：文档冻结
 
-- 模型请求失败、下载失败、超时、权限拒绝等错误统一映射为用户可读提示
-- 长耗时任务补“仍在处理中 / 已恢复 / 处理失败”的明确反馈
-- 卡片 patch 失败时做明确降级，而不是静默丢失更新
-- 在连接降级或恢复时给当前活跃会话适度提示
+目标文件：
 
-### P3: 会话与模型体验
+- `docs/02-architecture.md`
+- `docs/03-session-and-message-model.md`
+- `docs/04-api-contracts.md`
+- `docs/05-interaction-flows.md`
+- `docs/06-delivery-plan.md`
+- `docs/15-background-session-switch.md`
 
-- 已完成 session 切换从“阻止 live task”推进到“后台继续执行 + 等待态延迟显示”的首版实现
-- `/sessions` 的“查看后切换”体验继续打磨
-- `/model` 切换后的状态展示、校验和错误提示补齐
-- `session / model / repo / workspace` 的组合切换做更多回归验证
+产出：
 
-### P4: 多模态体验
-
-- 图片问答回复质量继续优化
-- 更复杂的附件-only、多附件、多轮补充说明场景补齐
-- 附件失败、缓存命中、超限错误补更清晰的用户提示
-
-### P5: 自动化测试与观测
-
-- 命令解析测试
-- 等待态文本回复测试
-- 绑定优先级测试
-- 附件与富文本解析测试
-- 消息入口去重入队测试
-- OpenCode 事件推进测试
-- OpenCode SSE 失败状态推进测试
-- SQLite store 集成测试
-- 重连与恢复链路的最小回归测试
-
-## OpenCode Web 持久化调研结论
-
-### 1. 运行态业务数据
-
-OpenCode 本体的核心数据持久化走 SQLite，而不是浏览器存储。
-
-参考实现：
-
-- `packages/opencode/src/storage/db.ts`
-- `packages/opencode/src/storage/db.bun.ts`
-- `packages/opencode/src/session/session.sql.ts`
-
-当前可以确认：
-
-- 数据库默认是本地 SQLite 文件
-- 打开后会启用 `WAL`
-- 通过 Drizzle migration 管 schema
-- `session`、`message`、`part`、`todo`、`permission` 等核心对象都落在 SQLite 表里
-
-### 2. Web / App 前端状态
-
-OpenCode Web / App 的页面状态、布局缓存、目录级缓存走 `localStorage`，不是 IndexedDB。
-
-参考实现：
-
-- `packages/app/src/utils/persist.ts`
-- `packages/app/src/pages/layout.tsx`
-- `packages/app/src/pages/session.tsx`
-- `packages/app/src/context/global-sync/child-store.ts`
-
-当前可以确认：
-
-- 使用 `Persist.global(...)`、`Persist.workspace(...)` 做 key 分层
-- 主要持久化布局、工作区顺序、项目元信息缓存、followup 等 UI 状态
-- 有本地缓存、限额保护和回退逻辑，但本质仍是浏览器本地存储
-
-### 3. 对 IMUI 的启发
-
-IMUI 是服务端运行时，不是浏览器前端，因此应当更接近 OpenCode 的“SQLite 持久化层”，而不是照搬 Web 的 `localStorage` 方案。
-
-建议分层：
-
-- 业务真状态：SQLite
-- 进程内瞬时状态：内存
-- 飞书卡片渲染缓存：必要时落 SQLite
-
-## 下一阶段开发顺序
-
-## Phase 9: 连接恢复与幂等
-
-目标：
-
-- 补齐飞书长连接、OpenCode SSE、后台队列的恢复能力
-- 让进程重启、连接抖动、事件迟到不再导致“已收到但没有后续”
-
-范围：
-
-- 飞书长连接自动重连与指数退避
-- OpenCode `/global/event` 自动重连与重订阅
-- `conn_state` 恢复与状态观测
-- `queue_job` 持久化与入站消息重放
-- 队列恢复与幂等回放
-- 消息入口去重入队保护
-- OpenCode 事件推进的最小自动化回归
-- 迟到事件、重复事件、失效 waiting 状态保护
+- 明确定义 `Task = originating turn`
+- 明确定义 `assistant_outbound = child ledger`
+- 明确 `idle != terminal`
+- 明确 fresh-session rotation、task-owned pending、reply anchor、兼容窗口
 
 验收：
 
-- 飞书长连接断开后可自动恢复
-- OpenCode 事件桥断开后可自动恢复
-- 进程重启后不会长期停在“已收到但无后续”
-- 同一请求不会因为重复事件被重复推进
+- 核心文档里不再出现“idle 就是完成”“一个 task 只有一个 outbound”“/new 先取消旧运行”的旧语义
 
-## Phase 10: 失败通知与长耗时体验
+## Phase 2：合约 / Schema / Store 兼容层
 
-目标：
+目标文件：
 
-- 让用户在失败、超时、恢复、降级时都能得到明确反馈
-- 提升长耗时执行的稳定感和可预期性
+- `src/contracts.ts`
+- `src/storage/admin.ts`
+- `src/storage/db.ts`
+- `src/gateway/task.ts`
+- `test/sqlite.test.ts`
 
-范围：
+关键改动：
 
-- 模型请求失败提示
-- 附件下载 / 缓存失败提示
-- 权限拒绝 / 问题超时 / 请求中断提示
-- 长耗时任务的“处理中”“恢复中”“已失败”文案
-- 卡片 patch 失败后的降级展示
-
-验收：
-
-- 关键失败都能映射成用户可读消息
-- 长耗时执行不会只停在模糊的“处理中”
-- 连接恢复后，当前活跃任务能有可见反馈
-
-## Phase 11: 会话、模型与多模态体验
-
-目标：
-
-- 打磨 `session / model / repo / workspace` 组合操作体验
-- 继续提升图片 / 文件 / 富文本输入后的回复质量
-
-范围：
-
-- `/sessions` 查看后切换体验
-- `/model` 状态展示、校验和错误回显
-- 复杂附件-only、多附件、多轮补充说明场景
-- 图片问答回复质量优化
+- 新增 `AssistantOutbound` 类型与 store API
+- schema bump，引入 `assistant_outbound(...)`
+- 新增 task-owned `pending_attachment_task(...)`
+- 保留 `outbound_message(task_id PK)` 作为 compat mirror 并 dual-write
+- 老 `pending_attachment(session_id)` 采用 lazy migration
 
 验收：
 
-- `/session` 与 `/model` 切换后的飞书实链行为稳定
-- 多附件与富文本输入后的体验可预期
-- 图片问答不再频繁暴露内部工具过程
+- 一个 task 能持久化多个 outbounds
+- `store.get_outbound(task_id)` 仍然返回 visible slot
+- task-owned pending 持久化成立
+- 老库升级后仍能打开并恢复兼容路径
 
-## Phase 12: 自动化测试与观测
+## Phase 3：用 child outbounds 替换 synthetic wait tasks
 
-目标：
+目标文件：
 
-- 为主链建立稳定回归
-- 补齐最小的定位与观测能力
+- `src/app/boot.ts`
+- `test/event.test.ts`
+- `test/progress.test.ts`
+- `test/dispatch.test.ts`
+- `test/boot.test.ts`
 
-范围：
+关键改动：
 
-- 命令解析测试
-- 等待态文本回复测试
-- 绑定优先级测试
-- 附件与富文本解析测试
-- SQLite store 集成测试
-- 连接恢复与事件幂等测试
-- 最小日志与调试辅助
+- 去掉 later permission/question 时的 task 克隆
+- wait 历史挂在同一个 task 的 `assistant_outbound` 下
+- 前台只展示队头 wait
+- 后台 wait 只记账，不立刻显示
 
 验收：
 
-- 关键主链至少各有一条自动化回归
-- 手工飞书回归 case 有固定清单
-- 发生线上异常时能较快定位到连接、队列还是 OpenCode 侧
+- repeated `permission.asked` / `question.asked` 不再新增 task 行
+- 同一前台 thread 仍然只有一个可见 wait
+- progress 与 wait 的可见性关系保持正确
 
-## 里程碑验收标准
+## Phase 4：multi-outbound delivery + terminal idempotency
 
-### M1
+目标文件：
 
-- 飞书长连接和 OpenCode 事件桥恢复稳定
-- 队列恢复和事件幂等可用
+- `src/opencode/client.ts`
+- `src/app/boot.ts`
+- `test/boot.test.ts`
+- `test/event.test.ts`
+- `test/dispatch.test.ts`
+- `test/probe.test.ts`
 
-### M2
+关键改动：
 
-- 关键失败都能映射成用户可读提示
-- 长耗时执行的状态反馈稳定
+- runtime 不再把所有助手输出压成一条 final text
+- `publish / deliver / patch` 按 child outbound 工作
+- `session.status=idle` 改成 checkpoint/reconciliation
+- repeated terminal 尝试变成 no-op
 
-### M3
+验收：
 
-- `session / model / repo / workspace` 组合切换可稳定使用
-- 多模态主链体验进一步收紧
+- 同一个 task 可以产生多条 outbound
+- repeated idle with same `result_hash` 是幂等 no-op
+- patch fallback 不会抹掉 outbound 历史
 
-### M4
+## Phase 5：supersession、task-owned attachment holds、recover/watch 硬化
 
-- 自动化回归覆盖主链
-- 发生异常时具备基本定位能力
+目标文件：
 
-## 风险与对策
+- `src/app/boot.ts`
+- `src/gateway/session.ts`（只在确实需要 helper 时）
+- `test/message-flow.test.ts`
+- `test/recover.test.ts`
+- `test/watch.test.ts`
+- `test/boot.test.ts`
 
-## Task Pack 执行记录
+关键改动：
 
-### 2026-04-13 - Task Pack 1
+- pending attachments 全部转成 `task_id` 寻址
+- `/abort`、`/repo` 等清理 pending 时按 `task_id` 做
+- 新普通 prompt 遇到 live non-waiting task 时，`route.reset(...)` 到 fresh session
+- `recover / resume / sweep / probe` 不再重新关闭已经 terminal 的 task
+- delayed wait replay 只在 session 回前台时发生
 
-- 改动范围：围绕 boot 后 active task 恢复补齐 `recover / on_conn / sweep` 衔接回归，覆盖 boot 后 `queued` 任务在 OpenCode ready 后继续推进、boot 后 `running` 任务自动收尾，以及恢复完成后 watchdog 不再重复结束同一任务
-- 自动化验证：`bun test test/recover.test.ts test/boot.test.ts test/watch.test.ts test/probe.test.ts` 通过；后续全量验证已覆盖这些分支
-- 飞书手工验证：本轮未执行，待真实联调时按发布清单补齐
-- 结果：Task Pack 1 的“重启后的 active task 恢复”主链已补到自动化回归，`recover -> resume -> sweep` 的重复完成 / 重复失败风险进一步收紧
-- 遗留问题：真实飞书与真实 OpenCode 服务重启联调仍未完成，active task 恢复的最终体验还需人工确认
+验收：
 
-### 2026-04-13 - Task Pack 2
+- `/new` 与 superseding prompt 不再中止旧 task，但旧 task 仍可后台完成
+- background wait 直到 replay 才显示
+- 背景 final/error 仍然回到 originating reply anchor
 
-- 改动范围：继续收紧队列恢复、迟到事件和事件幂等，补齐重复 session error、迟到 idle、已完成 job 重放保护等回归，确保 replay / late event 不再污染已收尾任务
-- 自动化验证：`bun test test/queue.test.ts test/event.test.ts test/dispatch.test.ts test/ingest.test.ts` 通过；后续全量验证已覆盖这些用例
-- 飞书手工验证：本轮未执行，待真实联调时按发布清单补齐
-- 结果：Task Pack 2 的幂等与重放保护继续收紧，重复入队、迟到 idle/error、completed job 重放等常见风险已有自动化托底
-- 遗留问题：如后续发现需要更复杂的持久化幂等 key 或新落盘字段，仍需升级给资深工程师 review
+## Phase 6：文档 / 运维同步 + full regression gate
 
-### 2026-04-13 - Task Pack 3
+目标文件：
 
-- 改动范围：继续补错误映射与长耗时提示，覆盖 `invalid_api_key`、`model_not_found`、超时、飞书卡片请求失败等错误文案，以及 queued / acked / running 阶段的 stuck 提示分级
-- 自动化验证：`bun test test/error.test.ts test/boot.test.ts test/watch.test.ts` 通过；`bun run typecheck` 通过
-- 飞书手工验证：本轮未执行，待真实联调时按发布清单补齐
-- 结果：Task Pack 3 的用户提示进一步统一，用户在认证失败、模型不可用、网络超时、卡片更新失败和长耗时卡住时能看到更明确的下一步建议
-- 遗留问题：provider 特定错误模式和真实飞书卡片失败场景仍可继续补细
+- `README.md`
+- `docs/06-delivery-plan.md`
+- `docs/09-junior-engineer-playbook.md`
+- `docs/10-release-checklist.md`
+- 以及任何被实现细节反证后需要修正的核心设计文档
 
-### 2026-04-13 - Task Pack 4
+关键改动：
 
-- 改动范围：补齐 `session / model / repo / workspace` 相关命令解析与 `boot` 主链回归，覆盖 `/status`、`/sessions`、`/new`、`/session`、`/repo`、`/repo --chat`、`/repo --me`、`/repo --workspace`、`/model`、`/model <provider>/<model>`、`/model reset`
-- 自动化验证：`bun test test/cmd.test.ts test/boot.test.ts test/error.test.ts` 通过；后续合并验证也已覆盖这些用例
-- 飞书手工验证：本轮未执行，待真实联调时按发布清单补齐
-- 结果：Task Pack 4 的自动化收口已完成，关键命令路径已有回归保护
-- 遗留问题：仍缺真实飞书环境下的组合切换手工验证
+- 去掉 README 和运维文档里关于旧 session 语义的陈述
+- 增加 intermediate/final、supersession、background replay、terminal no-op 的手工回归用例
+- 确保发布前文档与真实行为一致
 
-### 2026-04-13 - Task Pack 5
+验收：
 
-- 改动范围：补齐多图、多附件、附件-only 连续补充、最终回复过滤内部文本等回归；同时细化 `model_not_found` 的用户提示映射
-- 自动化验证：`bun test test/map.test.ts test/message-flow.test.ts test/opencode-client.test.ts test/boot.test.ts test/cmd.test.ts test/error.test.ts` 通过；`bun run typecheck` 通过
-- 飞书手工验证：本轮未执行，待真实联调时按发布清单补齐
-- 结果：Task Pack 5 的目标场景已有自动化覆盖，常见内部文本泄漏和附件累积场景已有稳定保护
-- 遗留问题：仍缺真实飞书里的图片 / 文件上传手工回归
+- `bun test`
+- `tsc --noEmit`
+- 通过一次真实 Feishu 手工回归
 
-### 2026-04-13 - Task Pack 6
+## 最终必须成立的回归不变量
 
-- 改动范围：补齐发布前文档与门禁，新增 `release:check` 静态校验脚本，覆盖 README、`.env.example`、`.gitignore`、发布清单与交付计划之间的关键一致性；同时补一条 `waiting_question` 允许自由文本回答的回归，用于排查真实飞书中的 `/init` 追问问题；后续又把 `release:check` 扩成验证命令与内建 slash 命令清单的一致性检查，降低 README / 发布清单 / 脚本之间的漂移风险
-- 自动化验证：`bun test`、`bun run typecheck`、`bun run release:check` 通过；`test/release.test.ts` 与 `test/boot.test.ts` 新增用例已纳入全量验证
-- 飞书手工验证：本轮仍未执行；真实飞书回归需按 `docs/10-release-checklist.md` 的 A-E 清单逐项补齐
-- 结果：Task Pack 6 的本地发布准备与静态门禁已落地，发布前的文档一致性和基础漏项已有自动化保护
-- 遗留问题：真实飞书中的 slash、多模态、等待态与重启恢复仍需人工联调确认；`/init` 追问问题的线上现象更可能出在事件 payload 或路由上下文，而非本地 `waiting_question` 文本回复分支
+- 一次用户轮次只创建一个 task
+- 一个 task 可以拥有多个 `assistant_outbound`
+- `store.get_outbound(task_id)` 在兼容窗口里仍然返回 visible slot
+- `pending_attachment` 的归属是 `task_id`
+- 每个 outbound 都保留 originating inbound / message correlation
+- `session.status=idle` 单独出现时不完成 task
+- 一个 task 最多只有一个 terminal closure
+- 后台 wait 延迟显示，切回时 replay
+- 新普通 prompt 遇到 live non-waiting task 时必须 fresh-session rotation
+- patch fallback 仍可用，且不会擦掉 outbound 历史
 
-### 2026-04-13 - Task Pack 7
+## 验证策略
 
-- 改动范围：补齐安装包发布链路，新增 `release:build` 打包脚本、安装包 README、`install.sh` / `uninstall.sh`、配置加载顺序约定，以及安装态配置模板；同时让运行时支持 `--env-file` 和默认配置目录回退，避免安装后依赖当前工作目录
-- 自动化验证：`bun test`、`bun run typecheck`、`bun run release:check`、`bun run release:build` 通过；新增 `test/env.test.ts` 与 `test/package.test.ts` 已纳入全量验证
-- 飞书手工验证：本轮未执行；安装包发布前仍需按 `docs/10-release-checklist.md` 完成真实飞书回归
-- 结果：项目已经具备“源码可运行 + 安装包可构建 + 安装后有固定配置目录”的基础发布能力
-- 遗留问题：尚未提供 Windows 安装包和自动更新能力；常驻运行当前以用户级 `launchd` / `systemd --user` 服务助手为主
+- 每个 phase 都先补对应测试，再让实现过测试
+- 最终全量验证使用：
 
-### 2026-04-13 - Task Pack 8
+```bash
+bun test
+tsc --noEmit
+```
 
-- 改动范围：补齐发布约束和安全收口，新增启动前 `release:doctor`、SQLite `db:migrate` / `db:backup`、运行时缓存清理、备份保留策略，以及 scope / 运维文档
-- 自动化验证：新增配置校验、清理策略、SQLite 管理回归；并把 `release:doctor`、数据库管理命令、新文档和新环境变量纳入 `release:check`
-- 飞书手工验证：本轮未执行；scope 最小化仍需按 `docs/13-feishu-scope-minimum.md` 在飞书控制台人工确认
-- 结果：安装包发布链之外，发布前体检、运行时数据治理、SQLite 运维和 scope 收口也已有明确执行路径
-- 遗留问题：scope 仍需依赖控制台人工核对；数据库 restore 当前仍为手工流程
-
-### 下一包建议：后台任务可见性与并行体验收口
-
-- 设计文档：`docs/15-background-session-switch.md`
-- 目标：在首版后台会话切换已落地的基础上，继续增强 `/status`、真实飞书回归和更复杂并行体验的可见性
-- 实施边界：继续保持 session 级语义，不引入 task 级命令寻址；优先收口手工体验和文案，而不是扩展协议范围
-
-## 风险 1: 连接抖动导致状态错乱
-
-对策：
-
-- 为长连接和 SSE 分别维护显式状态机
-- 所有恢复逻辑都建立在幂等写入之上
-
-## 风险 2: 长耗时任务在恢复过程中重复推进
-
-对策：
-
-- 关键事件落 `seen_event`
-- 按 session 维度串行化任务执行
-- 对迟到事件加任务状态保护
-
-## 风险 3: 附件下载和缓存导致磁盘膨胀
-
-对策：
-
-- SQLite 只存元数据
-- 文件本体落缓存目录
-- 启动时执行 TTL 和大小清理策略
-
-## 风险 4: 多模态输入和等待态任务串线
-
-对策：
-
-- 为 `pending_attachment` 和 waiting 状态单独建恢复语义
-- 只在同一 thread 内消费下一条文本
-
-## 风险 5: slash 命令语义与 Web / TUI 不一致
-
-对策：
-
-- 把命令分成 IM 原生命令、可转发命令、UI 专属命令三类
-- 不强行透传 UI 命令
-
-## 下一步建议
-
-接下来按这个顺序推进：
-
-1. 先做长连接、SSE、队列的重连 / 恢复 / 幂等补齐
-2. 再做请求失败、卡片降级和长耗时反馈的用户提示
-3. 接着打磨 `session / model / repo / workspace` 的组合体验
-4. 最后补自动化回归和观测能力
+- 代码全绿后，再进入真实 Feishu 联调验收
