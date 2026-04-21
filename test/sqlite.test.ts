@@ -1,7 +1,20 @@
+import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
 import crypto from "node:crypto"
 import path from "node:path"
-import type { Attachment, ConnState, ImSession, InboundMessage, Outbound, Pending, QueueJob, RepoPref, Task } from "../src/contracts.ts"
+import type {
+  Attachment,
+  AssistantOutbound,
+  ConnState,
+  ImSession,
+  InboundMessage,
+  Outbound,
+  Pending,
+  PendingAttachment,
+  QueueJob,
+  RepoPref,
+  Task,
+} from "../src/contracts.ts"
 import { createSqliteStore } from "../src/storage/db.ts"
 
 function file() {
@@ -50,6 +63,7 @@ function task(input?: Partial<Task>): Task {
     im_session_id: "ims_1",
     session_id: "ses_1",
     inbound_id: "in_1",
+    reply_anchor_message_id: "msg_1",
     directory: "/tmp/work",
     workspace_id: "ws_1",
     status: "running",
@@ -73,6 +87,7 @@ describe("sqlite store", () => {
     } satisfies RepoPref
     const row = task({
       req: "req_1",
+      req_id: "req_1",
       note: "note",
       outbound_id: "out_1",
     })
@@ -86,6 +101,55 @@ describe("sqlite store", () => {
       created_at: 1,
       updated_at: 2,
     } satisfies Outbound
+    const firstAssistantOutbound = {
+      id: "aso_1",
+      task_id: row.id,
+      session_id: row.session_id,
+      seq: 1,
+      kind: "question",
+      action: "reply",
+      state: "open",
+      origin_inbound_id: row.inbound_id,
+      origin_message_id: "msg_1",
+      req_key: "req_1",
+      terminal: false,
+      feishu_message_id: "out_1",
+      payload: { title: "Need input" },
+      created_at: 2,
+      updated_at: 2,
+    } satisfies AssistantOutbound
+    const secondAssistantOutbound = {
+      id: "aso_2",
+      task_id: row.id,
+      session_id: row.session_id,
+      seq: 3,
+      kind: "final",
+      action: "reply",
+      state: "resolved",
+      origin_inbound_id: row.inbound_id,
+      origin_message_id: "msg_1",
+      terminal: true,
+      feishu_message_id: "out_2",
+      payload: { title: "Done" },
+      created_at: 4,
+      updated_at: 4,
+    } satisfies AssistantOutbound
+    const thirdAssistantOutbound = {
+      id: "aso_3",
+      task_id: row.id,
+      session_id: row.session_id,
+      seq: 2,
+      kind: "progress",
+      action: "patch",
+      state: "emitted",
+      origin_inbound_id: row.inbound_id,
+      origin_message_id: "msg_1",
+      terminal: false,
+      feishu_message_id: "out_1",
+      payload: { title: "Working" },
+      created_at: 3,
+      updated_at: 3,
+    } satisfies AssistantOutbound
     const asset = {
       message_id: "msg_1",
       key: "img_1",
@@ -111,6 +175,21 @@ describe("sqlite store", () => {
       created_at: 1,
       updated_at: 2,
     } satisfies Pending
+    const taskHold = {
+      task_id: row.id,
+      session_id: row.session_id,
+      origin_inbound_id: row.inbound_id,
+      origin_message_id: "msg_1",
+      assets: [
+        {
+          kind: "file",
+          key: "file_task_1",
+          name: "task-report.pdf",
+        },
+      ],
+      created_at: 2,
+      updated_at: 4,
+    } satisfies PendingAttachment
     const job = {
       id: "in_1",
       status: "queued",
@@ -130,8 +209,12 @@ describe("sqlite store", () => {
     await a.save_inbound(inbound())
     await a.save_task(row)
     await a.save_outbound(out)
+    await a.save_assistant_outbound(secondAssistantOutbound)
+    await a.save_assistant_outbound(firstAssistantOutbound)
+    await a.save_assistant_outbound(thirdAssistantOutbound)
     await a.save_attachment(asset)
     await a.save_pending(hold)
+    await a.save_task_pending(taskHold)
     await a.save_job(job)
     await a.mark("evt_1")
     await a.set_conn(conn)
@@ -149,12 +232,107 @@ describe("sqlite store", () => {
     expect(await b.get_task_by_inbound("in_1")).toMatchObject(row)
     expect(await b.get_task_by_req("req_1")).toMatchObject(row)
     expect(await b.get_outbound("tsk_1")).toMatchObject(out)
+    expect(await b.get_assistant_outbound("aso_2")).toMatchObject(secondAssistantOutbound)
+    expect(await b.get_assistant_outbound("aso_3")).toMatchObject(thirdAssistantOutbound)
+    expect(await b.list_assistant_outbounds("tsk_1")).toMatchObject([
+      firstAssistantOutbound,
+      thirdAssistantOutbound,
+      secondAssistantOutbound,
+    ])
+    expect(await b.list_open_waits("tsk_1")).toMatchObject([firstAssistantOutbound])
     expect(await b.get_attachment({ message_id: "msg_1", key: "img_1" })).toMatchObject(asset)
     expect(await b.get_pending("ses_1")).toMatchObject(hold)
+    expect(await b.get_task_pending("tsk_1")).toMatchObject(taskHold)
     expect(await b.get_job("in_1")).toMatchObject(job)
     expect(await b.get_conn("opencode")).toMatchObject(conn)
     expect(await b.seen("evt_1")).toBe(true)
     await b.close?.()
+  })
+
+  test("lazily migrates legacy session-owned pending attachments", async () => {
+    const db = file()
+    const raw = new Database(db, { create: true, strict: true })
+    const legacyTask = task({
+      id: "tsk_legacy",
+      session_id: "ses_legacy",
+      inbound_id: "in_legacy",
+      reply_anchor_message_id: "msg_legacy",
+      created_at: 11,
+      updated_at: 11,
+    })
+    const legacyInbound = inbound({
+      id: "in_legacy",
+      event_id: "evt_legacy",
+      message_id: "msg_legacy",
+      created_at: 11,
+      text: "legacy",
+    })
+    const legacyPending = {
+      session_id: "ses_legacy",
+      inbound_id: "in_legacy",
+      assets: [
+        {
+          kind: "image",
+          key: "img_legacy",
+          name: "legacy.png",
+        },
+      ],
+      created_at: 12,
+      updated_at: 13,
+    } satisfies Pending
+
+    try {
+      raw.exec(`
+        PRAGMA user_version = 1;
+        CREATE TABLE task (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          req TEXT,
+          created_at INTEGER NOT NULL,
+          data TEXT NOT NULL
+        );
+        CREATE TABLE inbound_event (
+          id TEXT PRIMARY KEY,
+          data TEXT NOT NULL
+        );
+        CREATE TABLE pending_attachment (
+          session_id TEXT PRIMARY KEY,
+          data TEXT NOT NULL
+        );
+      `)
+      raw
+        .query("insert into task (id, session_id, req, created_at, data) values (?1, ?2, ?3, ?4, ?5)")
+        .run(legacyTask.id, legacyTask.session_id, null, legacyTask.created_at, JSON.stringify(legacyTask))
+      raw.query("insert into inbound_event (id, data) values (?1, ?2)").run(legacyInbound.id, JSON.stringify(legacyInbound))
+      raw
+        .query("insert into pending_attachment (session_id, data) values (?1, ?2)")
+        .run(legacyPending.session_id, JSON.stringify(legacyPending))
+    } finally {
+      raw.close(false)
+    }
+
+    const store = createSqliteStore(db)
+
+    expect(await store.get_pending("ses_legacy")).toMatchObject(legacyPending)
+
+    const migrated = await store.get_task_pending("tsk_legacy")
+
+    expect(migrated).toMatchObject({
+      task_id: "tsk_legacy",
+      session_id: "ses_legacy",
+      origin_inbound_id: "in_legacy",
+      origin_message_id: "msg_legacy",
+      assets: legacyPending.assets,
+      created_at: legacyPending.created_at,
+      updated_at: legacyPending.updated_at,
+    } satisfies PendingAttachment)
+    expect(await store.get_pending("ses_legacy")).toBeNull()
+    await store.close?.()
+
+    const reopened = createSqliteStore(db)
+    expect(await reopened.get_task_pending("tsk_legacy")).toMatchObject(migrated!)
+    expect(await reopened.get_pending("ses_legacy")).toBeNull()
+    await reopened.close?.()
   })
 
   test("keeps only the latest session mapping", async () => {

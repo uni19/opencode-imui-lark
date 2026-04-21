@@ -1,3 +1,4 @@
+import crypto from "node:crypto"
 import path from "node:path"
 import type {
   AppCfg,
@@ -115,7 +116,7 @@ async function req(cfg: AppCfg, method: string, path: string, body?: Json) {
   return JSON.parse(raw)
 }
 
-function assistant(item: unknown): item is { info?: { role?: string }; parts?: unknown[] } {
+function assistant(item: unknown): item is Message {
   if (!item || typeof item !== "object") return false
   if (!("info" in item)) return false
   const info = item.info
@@ -143,18 +144,37 @@ function pick(list: Message[]) {
   }
 }
 
+function visible(list: Message[]) {
+  return list.map(output).filter((item): item is string => !!item)
+}
+
+function latest(list: Message[]) {
+  return list.find((item) => !!output(item) || !!rawtext(item.parts))
+}
+
+function hash(entries: string[]) {
+  return crypto.createHash("sha256").update(JSON.stringify(entries)).digest("hex")
+}
+
 function inspect(data: unknown): OpencodeResult {
   if (!Array.isArray(data)) return { state: "empty" }
-  const all = [...data].reverse().filter(assistant)
+  const messages = data.filter(assistant)
+  const entries = visible(messages.filter((item) => !summary(item)))
+  const all = [...messages].reverse()
   const list = all.filter((item) => !summary(item))
+  const current = latest(list)
   const text =
     pick(list.filter((item) => ended(item) && !failed(item))) ??
     pick(list.filter(ended)) ??
     pick(list.filter((item) => !failed(item))) ??
     pick(list)
-  if (text) return { state: "ok", text }
-  if (all.some((item) => !!rawtext(item.parts))) return { state: "filtered" }
-  return { state: "empty" }
+  const out = {
+    ...(entries.length > 0 ? { entries, hash: hash(entries) } : {}),
+    ...(current ? { completed: ended(current) } : {}),
+  }
+  if (text) return { state: "ok", text, ...out }
+  if (all.some((item) => !!rawtext(item.parts))) return { state: "filtered", ...out }
+  return { state: "empty", ...out }
 }
 
 export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {

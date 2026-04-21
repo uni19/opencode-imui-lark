@@ -1,7 +1,8 @@
 import crypto from "node:crypto"
-import type { Task, TaskSvc, Store } from "../contracts.js"
+import type { Task, TaskSvc, Store, TaskTerminalKind } from "../contracts.js"
 
 const now = () => Date.now()
+const terminal = new Set<Task["status"]>(["completed", "failed", "aborted"])
 
 export function createTaskSvc(store: Store): TaskSvc {
   const patch = async (id: string, fn: (task: Task) => Task) => {
@@ -18,6 +19,7 @@ export function createTaskSvc(store: Store): TaskSvc {
         im_session_id: input.im_session_id,
         session_id: input.session_id,
         inbound_id: input.inbound_id,
+        reply_anchor_message_id: input.reply_anchor_message_id,
         directory: input.directory,
         workspace_id: input.workspace_id,
         status: "queued",
@@ -49,6 +51,7 @@ export function createTaskSvc(store: Store): TaskSvc {
         ...task,
         status: input.req_type === "permission" ? "waiting_permission" : "waiting_question",
         req_type: input.req_type,
+        req_id: input.req,
         req: input.req,
         updated_at: now(),
       }))
@@ -63,10 +66,45 @@ export function createTaskSvc(store: Store): TaskSvc {
       }))
     },
 
+    async checkpoint(input) {
+      await patch(input.id, (task) => ({
+        ...task,
+        result_hash: input.result_hash ?? task.result_hash,
+        note: input.note ?? task.note,
+        updated_at: now(),
+      }))
+    },
+
+    async close(input) {
+      const task = await store.get_task(input.id)
+      if (!task) throw new Error(`task not found: ${input.id}`)
+      if (terminal.has(task.status)) return false
+      await store.save_task({
+        ...task,
+        status: input.status,
+        terminal_kind: input.terminal_kind ?? defaultTerminalKind(input.status),
+        terminal_outbound_id: input.terminal_outbound_id ?? task.terminal_outbound_id,
+        result_hash: input.result_hash ?? task.result_hash,
+        err: input.err ?? task.err,
+        note: input.note ?? task.note,
+        updated_at: now(),
+      })
+      return true
+    },
+
+    async supersede(input) {
+      await patch(input.id, (task) => ({
+        ...task,
+        superseded_by_task_id: input.superseded_by_task_id,
+        updated_at: now(),
+      }))
+    },
+
     async done(id, note) {
       await patch(id, (task) => ({
         ...task,
         status: "completed",
+        terminal_kind: task.terminal_kind ?? "final",
         note: note ?? task.note,
         updated_at: now(),
       }))
@@ -76,6 +114,7 @@ export function createTaskSvc(store: Store): TaskSvc {
       await patch(input.id, (task) => ({
         ...task,
         status: "failed",
+        terminal_kind: task.terminal_kind ?? "error",
         err: input.err,
         note: input.note ?? input.err,
         updated_at: now(),
@@ -86,6 +125,7 @@ export function createTaskSvc(store: Store): TaskSvc {
       await patch(id, (task) => ({
         ...task,
         status: "aborted",
+        terminal_kind: task.terminal_kind ?? "aborted",
         note: note ?? task.note,
         updated_at: now(),
       }))
@@ -107,4 +147,10 @@ export function createTaskSvc(store: Store): TaskSvc {
       }))
     },
   }
+}
+
+function defaultTerminalKind(status: Extract<Task["status"], "completed" | "failed" | "aborted">): TaskTerminalKind {
+  if (status === "completed") return "final"
+  if (status === "failed") return "error"
+  return "aborted"
 }

@@ -1,11 +1,12 @@
-import path from "node:path"
 import type {
   Attachment,
+  AssistantOutbound,
   ConnState,
   ImSession,
   InboundEvent,
   Outbound,
   Pending,
+  PendingAttachment,
   QueueJob,
   RepoPref,
   Store,
@@ -31,37 +32,69 @@ function parse<T>(val: string | null) {
   }
 }
 
+function parseRows<T>(rows: Array<{ data: string }>) {
+  return rows.flatMap((row) => {
+    const item = parse<T>(row.data)
+    return item ? [item] : []
+  })
+}
+
+function sortByCreatedAt<T extends { created_at: number }>(rows: T[]) {
+  rows.sort((a, b) => a.created_at - b.created_at)
+  return rows
+}
+
+function sortAssistantOutbounds(rows: AssistantOutbound[]) {
+  rows.sort((a, b) => a.seq - b.seq || a.created_at - b.created_at || a.id.localeCompare(b.id))
+  return rows
+}
+
+function taskPendingFromLegacy(task: Task, legacy: Pending, origin_message_id?: string): PendingAttachment {
+  return {
+    task_id: task.id,
+    session_id: legacy.session_id,
+    origin_inbound_id: legacy.inbound_id,
+    origin_message_id: origin_message_id ?? task.reply_anchor_message_id,
+    assets: legacy.assets,
+    created_at: legacy.created_at,
+    updated_at: legacy.updated_at,
+  }
+}
+
 export function createMemoryStore(): Store {
-  const sessions = new Map<string, ImSession>()
-  const list = new Map<string, ImSession>()
+  const sessionByMapKey = new Map<string, ImSession>()
+  const sessionByOpencodeId = new Map<string, ImSession>()
   const prefs = new Map<string, RepoPref>()
   const tasks = new Map<string, Task>()
-  const inbound = new Map<string, InboundEvent>()
+  const inboundEvents = new Map<string, InboundEvent>()
   const jobs = new Map<string, QueueJob>()
-  const outbound = new Map<string, Outbound>()
+  const outboundByTaskId = new Map<string, Outbound>()
+  const assistantOutboundById = new Map<string, AssistantOutbound>()
   const attachments = new Map<string, Attachment>()
-  const pending = new Map<string, Pending>()
+  const legacyPendingBySessionId = new Map<string, Pending>()
+  const taskPendingByTaskId = new Map<string, PendingAttachment>()
   const seen = new Set<string>()
   const conn = new Map<string, ConnState>()
 
   return {
     async get_session(input) {
-      return sessions.get(key(input.tenant_id, input.chat_id, input.thread_id)) ?? null
+      return sessionByMapKey.get(key(input.tenant_id, input.chat_id, input.thread_id)) ?? null
     },
 
     async get_session_by_opencode(session_id) {
-      return list.get(session_id) ?? null
+      return sessionByOpencodeId.get(session_id) ?? null
     },
 
     async save_session(input) {
-      const old = sessions.get(key(input.tenant_id, input.chat_id, input.thread_id))
-      const hit = list.get(input.session_id)
-      if (old && old.session_id !== input.session_id) list.delete(old.session_id)
+      const mapKey = key(input.tenant_id, input.chat_id, input.thread_id)
+      const old = sessionByMapKey.get(mapKey)
+      const hit = sessionByOpencodeId.get(input.session_id)
+      if (old && old.session_id !== input.session_id) sessionByOpencodeId.delete(old.session_id)
       if (hit) {
-        sessions.delete(key(hit.tenant_id, hit.chat_id, hit.thread_id))
+        sessionByMapKey.delete(key(hit.tenant_id, hit.chat_id, hit.thread_id))
       }
-      sessions.set(key(input.tenant_id, input.chat_id, input.thread_id), input)
-      list.set(input.session_id, input)
+      sessionByMapKey.set(mapKey, input)
+      sessionByOpencodeId.set(input.session_id, input)
     },
 
     async get_pref(input) {
@@ -81,41 +114,40 @@ export function createMemoryStore(): Store {
     },
 
     async get_task_by_inbound(inbound_id) {
-      const all = [...tasks.values()].filter((item) => item.inbound_id === inbound_id)
-      all.sort((a, b) => a.created_at - b.created_at)
-      return all.at(-1) ?? null
+      const rows = [...tasks.values()].filter((item) => item.inbound_id === inbound_id)
+      sortByCreatedAt(rows)
+      return rows.at(-1) ?? null
     },
 
     async get_last_task(session_id) {
-      const all = [...tasks.values()].filter((item) => item.session_id === session_id)
-      all.sort((a, b) => a.created_at - b.created_at)
-      return all.at(-1) ?? null
+      const rows = [...tasks.values()].filter((item) => item.session_id === session_id)
+      sortByCreatedAt(rows)
+      return rows.at(-1) ?? null
     },
 
     async get_task_by_req(req) {
-      const all = [...tasks.values()].filter((item) => item.req === req)
-      all.sort((a, b) => a.created_at - b.created_at)
-      return all.at(-1) ?? null
+      const rows = [...tasks.values()].filter((item) => item.req_id === req || item.req === req)
+      sortByCreatedAt(rows)
+      return rows.at(-1) ?? null
     },
 
     async list_tasks(input) {
-      const all = [...tasks.values()]
-      const list = all.filter((item) => {
+      const rows = [...tasks.values()].filter((item) => {
         if (input?.status?.length && !input.status.includes(item.status)) return false
         if (input?.session_id && item.session_id !== input.session_id) return false
         if (input?.inbound_id && item.inbound_id !== input.inbound_id) return false
         return true
       })
-      list.sort((a, b) => a.created_at - b.created_at)
-      return list
+      sortByCreatedAt(rows)
+      return rows
     },
 
     async save_inbound(input) {
-      inbound.set(input.id, input)
+      inboundEvents.set(input.id, input)
     },
 
     async get_inbound(id) {
-      return inbound.get(id) ?? null
+      return inboundEvents.get(id) ?? null
     },
 
     async save_job(input) {
@@ -127,10 +159,10 @@ export function createMemoryStore(): Store {
     },
 
     async claim_job() {
-      const list = [...jobs.values()]
+      const rows = [...jobs.values()]
         .filter((item) => item.status === "queued")
         .sort((a, b) => a.created_at - b.created_at)
-      const row = list.at(0)
+      const row = rows.at(0)
       if (!row) return null
       const next = {
         ...row,
@@ -176,11 +208,29 @@ export function createMemoryStore(): Store {
     },
 
     async save_outbound(input) {
-      outbound.set(input.task_id, input)
+      outboundByTaskId.set(input.task_id, input)
     },
 
     async get_outbound(task_id) {
-      return outbound.get(task_id) ?? null
+      return outboundByTaskId.get(task_id) ?? null
+    },
+
+    async save_assistant_outbound(input) {
+      assistantOutboundById.set(input.id, input)
+    },
+
+    async get_assistant_outbound(id) {
+      return assistantOutboundById.get(id) ?? null
+    },
+
+    async list_assistant_outbounds(task_id) {
+      return sortAssistantOutbounds([...assistantOutboundById.values()].filter((item) => item.task_id === task_id))
+    },
+
+    async list_open_waits(task_id) {
+      return sortAssistantOutbounds(
+        [...assistantOutboundById.values()].filter((item) => item.task_id === task_id && item.state === "open"),
+      )
     },
 
     async save_attachment(input) {
@@ -192,15 +242,39 @@ export function createMemoryStore(): Store {
     },
 
     async save_pending(input) {
-      pending.set(input.session_id, input)
+      legacyPendingBySessionId.set(input.session_id, input)
     },
 
     async get_pending(session_id) {
-      return pending.get(session_id) ?? null
+      return legacyPendingBySessionId.get(session_id) ?? null
     },
 
     async drop_pending(session_id) {
-      pending.delete(session_id)
+      legacyPendingBySessionId.delete(session_id)
+    },
+
+    async save_task_pending(input) {
+      taskPendingByTaskId.set(input.task_id, input)
+    },
+
+    async get_task_pending(task_id) {
+      const hit = taskPendingByTaskId.get(task_id)
+      if (hit) return hit
+      const task = tasks.get(task_id)
+      if (!task) return null
+      const legacy = legacyPendingBySessionId.get(task.session_id)
+      if (!legacy) return null
+      const origin = inboundEvents.get(task.inbound_id)
+      const migrated = taskPendingFromLegacy(task, legacy, origin?.message_id)
+      taskPendingByTaskId.set(task_id, migrated)
+      legacyPendingBySessionId.delete(task.session_id)
+      return migrated
+    },
+
+    async drop_task_pending(task_id) {
+      taskPendingByTaskId.delete(task_id)
+      const task = tasks.get(task_id)
+      if (task) legacyPendingBySessionId.delete(task.session_id)
     },
 
     async seen(val) {
@@ -225,16 +299,16 @@ export function createSqliteStore(file: string): Store {
   const db = openSqlite(file)
   let live = true
 
-  const get_session = db.query<{ data: string }, [string, string, string]>(
+  const getSessionStmt = db.query<{ data: string }, [string, string, string]>(
     "select data from im_session where tenant_id = ?1 and chat_id = ?2 and thread_id = ?3 limit 1",
   )
-  const get_session_by_opencode = db.query<{ data: string }, [string]>(
+  const getSessionByOpencodeStmt = db.query<{ data: string }, [string]>(
     "select data from im_session where opencode_session_id = ?1 limit 1",
   )
-  const get_session_map = db.query<{ opencode_session_id: string | null }, [string]>(
+  const getSessionMapStmt = db.query<{ opencode_session_id: string | null }, [string]>(
     "select opencode_session_id from im_session where map_key = ?1 limit 1",
   )
-  const save_session = db.query(
+  const saveSessionStmt = db.query(
     `
       insert into im_session (
         map_key,
@@ -254,9 +328,9 @@ export function createSqliteStore(file: string): Store {
         updated_at = excluded.updated_at
     `,
   )
-  const drop_session = db.query("delete from im_session where opencode_session_id = ?1")
-  const get_pref = db.query<{ data: string }, [string]>("select data from repo_pref where pref_key = ?1 limit 1")
-  const save_pref = db.query(
+  const dropSessionStmt = db.query("delete from im_session where opencode_session_id = ?1")
+  const getPrefStmt = db.query<{ data: string }, [string]>("select data from repo_pref where pref_key = ?1 limit 1")
+  const savePrefStmt = db.query(
     `
       insert into repo_pref (pref_key, scope, tenant_id, chat_id, user_id, data)
       values (?1, ?2, ?3, ?4, ?5, ?6)
@@ -268,7 +342,7 @@ export function createSqliteStore(file: string): Store {
         data = excluded.data
     `,
   )
-  const save_task = db.query(
+  const saveTaskStmt = db.query(
     `
       insert into task (id, session_id, req, created_at, data)
       values (?1, ?2, ?3, ?4, ?5)
@@ -279,18 +353,18 @@ export function createSqliteStore(file: string): Store {
         data = excluded.data
     `,
   )
-  const get_task = db.query<{ data: string }, [string]>("select data from task where id = ?1 limit 1")
-  const get_task_by_inbound = db.query<{ data: string }, [string]>(
+  const getTaskStmt = db.query<{ data: string }, [string]>("select data from task where id = ?1 limit 1")
+  const getTaskByInboundStmt = db.query<{ data: string }, [string]>(
     "select data from task where json_extract(data, '$.inbound_id') = ?1 order by created_at desc limit 1",
   )
-  const get_last_task = db.query<{ data: string }, [string]>(
+  const getLastTaskStmt = db.query<{ data: string }, [string]>(
     "select data from task where session_id = ?1 order by created_at desc limit 1",
   )
-  const get_task_by_req = db.query<{ data: string }, [string]>(
+  const getTaskByReqStmt = db.query<{ data: string }, [string]>(
     "select data from task where req = ?1 order by created_at desc limit 1",
   )
-  const list_tasks = db.query<{ data: string }, []>("select data from task order by created_at asc")
-  const save_inbound = db.query(
+  const listTasksStmt = db.query<{ data: string }, []>("select data from task order by created_at asc")
+  const saveInboundStmt = db.query(
     `
       insert into inbound_event (id, data)
       values (?1, ?2)
@@ -298,8 +372,8 @@ export function createSqliteStore(file: string): Store {
         data = excluded.data
     `,
   )
-  const get_inbound = db.query<{ data: string }, [string]>("select data from inbound_event where id = ?1 limit 1")
-  const save_job = db.query(
+  const getInboundStmt = db.query<{ data: string }, [string]>("select data from inbound_event where id = ?1 limit 1")
+  const saveJobStmt = db.query(
     `
       insert into queue_job (id, status, created_at, updated_at, data)
       values (?1, ?2, ?3, ?4, ?5)
@@ -310,12 +384,12 @@ export function createSqliteStore(file: string): Store {
         data = excluded.data
     `,
   )
-  const get_job = db.query<{ data: string }, [string]>("select data from queue_job where id = ?1 limit 1")
-  const pick_job = db.query<{ data: string }, []>(
+  const getJobStmt = db.query<{ data: string }, [string]>("select data from queue_job where id = ?1 limit 1")
+  const pickJobStmt = db.query<{ data: string }, []>(
     "select data from queue_job where status = 'queued' order by created_at asc limit 1",
   )
-  const list_job = db.query<{ data: string }, []>("select data from queue_job order by created_at asc")
-  const save_outbound = db.query(
+  const listJobStmt = db.query<{ data: string }, []>("select data from queue_job order by created_at asc")
+  const saveOutboundStmt = db.query(
     `
       insert into outbound_message (task_id, data)
       values (?1, ?2)
@@ -323,10 +397,49 @@ export function createSqliteStore(file: string): Store {
         data = excluded.data
     `,
   )
-  const get_outbound = db.query<{ data: string }, [string]>(
+  const getOutboundStmt = db.query<{ data: string }, [string]>(
     "select data from outbound_message where task_id = ?1 limit 1",
   )
-  const save_attachment = db.query(
+  const saveAssistantOutboundStmt = db.query(
+    `
+      insert into assistant_outbound (
+        id,
+        task_id,
+        session_id,
+        seq,
+        kind,
+        action,
+        state,
+        req_key,
+        terminal,
+        created_at,
+        updated_at,
+        data
+      ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+      on conflict(id) do update set
+        task_id = excluded.task_id,
+        session_id = excluded.session_id,
+        seq = excluded.seq,
+        kind = excluded.kind,
+        action = excluded.action,
+        state = excluded.state,
+        req_key = excluded.req_key,
+        terminal = excluded.terminal,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at,
+        data = excluded.data
+    `,
+  )
+  const getAssistantOutboundStmt = db.query<{ data: string }, [string]>(
+    "select data from assistant_outbound where id = ?1 limit 1",
+  )
+  const listAssistantOutboundsStmt = db.query<{ data: string }, [string]>(
+    "select data from assistant_outbound where task_id = ?1 order by seq asc, created_at asc",
+  )
+  const listOpenWaitsStmt = db.query<{ data: string }, [string]>(
+    "select data from assistant_outbound where task_id = ?1 and state = 'open' order by seq asc, created_at asc",
+  )
+  const saveAttachmentStmt = db.query(
     `
       insert into attachment (attachment_key, message_id, asset_key, data, updated_at)
       values (?1, ?2, ?3, ?4, ?5)
@@ -337,10 +450,10 @@ export function createSqliteStore(file: string): Store {
         updated_at = excluded.updated_at
     `,
   )
-  const get_attachment = db.query<{ data: string }, [string]>(
+  const getAttachmentStmt = db.query<{ data: string }, [string]>(
     "select data from attachment where attachment_key = ?1 limit 1",
   )
-  const save_pending = db.query(
+  const savePendingStmt = db.query(
     `
       insert into pending_attachment (session_id, data)
       values (?1, ?2)
@@ -348,19 +461,34 @@ export function createSqliteStore(file: string): Store {
         data = excluded.data
     `,
   )
-  const get_pending = db.query<{ data: string }, [string]>(
+  const getPendingStmt = db.query<{ data: string }, [string]>(
     "select data from pending_attachment where session_id = ?1 limit 1",
   )
-  const drop_pending = db.query("delete from pending_attachment where session_id = ?1")
-  const get_seen = db.query<{ key: string }, [string]>("select key from seen_event where key = ?1 limit 1")
-  const save_seen = db.query(
+  const dropPendingStmt = db.query("delete from pending_attachment where session_id = ?1")
+  const saveTaskPendingStmt = db.query(
+    `
+      insert into pending_attachment_task (task_id, session_id, created_at, updated_at, data)
+      values (?1, ?2, ?3, ?4, ?5)
+      on conflict(task_id) do update set
+        session_id = excluded.session_id,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at,
+        data = excluded.data
+    `,
+  )
+  const getTaskPendingStmt = db.query<{ data: string }, [string]>(
+    "select data from pending_attachment_task where task_id = ?1 limit 1",
+  )
+  const dropTaskPendingStmt = db.query("delete from pending_attachment_task where task_id = ?1")
+  const getSeenStmt = db.query<{ key: string }, [string]>("select key from seen_event where key = ?1 limit 1")
+  const saveSeenStmt = db.query(
     `
       insert into seen_event (key, created_at)
       values (?1, ?2)
       on conflict(key) do nothing
     `,
   )
-  const save_conn = db.query(
+  const saveConnStmt = db.query(
     `
       insert into conn_state (name, data)
       values (?1, ?2)
@@ -368,25 +496,49 @@ export function createSqliteStore(file: string): Store {
         data = excluded.data
     `,
   )
-  const get_conn = db.query<{ data: string }, [string]>("select data from conn_state where name = ?1 limit 1")
+  const getConnStmt = db.query<{ data: string }, [string]>("select data from conn_state where name = ?1 limit 1")
+
+  const readTask = (id: string) => parse<Task>(getTaskStmt.get(id)?.data ?? null)
+  const readInbound = (id: string) => parse<InboundEvent>(getInboundStmt.get(id)?.data ?? null)
+  const readLegacyPending = (session_id: string) => parse<Pending>(getPendingStmt.get(session_id)?.data ?? null)
+
+  const migrateLegacyPending = (task_id: string) => {
+    const task = readTask(task_id)
+    if (!task) return null
+    const legacy = readLegacyPending(task.session_id)
+    if (!legacy) return null
+    const origin = readInbound(task.inbound_id)
+    const migrated = taskPendingFromLegacy(task, legacy, origin?.message_id)
+    if (live) {
+      saveTaskPendingStmt.run(
+        migrated.task_id,
+        migrated.session_id ?? null,
+        migrated.created_at,
+        migrated.updated_at,
+        text(migrated),
+      )
+      dropPendingStmt.run(task.session_id)
+    }
+    return migrated
+  }
 
   return {
     async get_session(input) {
-      return parse<ImSession>(get_session.get(input.tenant_id, input.chat_id, input.thread_id ?? "")?.data ?? null)
+      return parse<ImSession>(getSessionStmt.get(input.tenant_id, input.chat_id, input.thread_id ?? "")?.data ?? null)
     },
 
     async get_session_by_opencode(session_id) {
-      return parse<ImSession>(get_session_by_opencode.get(session_id)?.data ?? null)
+      return parse<ImSession>(getSessionByOpencodeStmt.get(session_id)?.data ?? null)
     },
 
     async save_session(input) {
       if (!live) return
-      const map = key(input.tenant_id, input.chat_id, input.thread_id)
-      const old = get_session_map.get(map)?.opencode_session_id
-      drop_session.run(input.session_id)
-      if (old && old !== input.session_id) drop_session.run(old)
-      save_session.run(
-        map,
+      const mapKey = key(input.tenant_id, input.chat_id, input.thread_id)
+      const old = getSessionMapStmt.get(mapKey)?.opencode_session_id
+      dropSessionStmt.run(input.session_id)
+      if (old && old !== input.session_id) dropSessionStmt.run(old)
+      saveSessionStmt.run(
+        mapKey,
         input.session_id,
         input.tenant_id,
         input.chat_id,
@@ -397,12 +549,12 @@ export function createSqliteStore(file: string): Store {
     },
 
     async get_pref(input) {
-      return parse<RepoPref>(get_pref.get(pref(input.scope, input.tenant_id, input.chat_id, input.user_id))?.data ?? null)
+      return parse<RepoPref>(getPrefStmt.get(pref(input.scope, input.tenant_id, input.chat_id, input.user_id))?.data ?? null)
     },
 
     async save_pref(input) {
       if (!live) return
-      save_pref.run(
+      savePrefStmt.run(
         pref(input.scope, input.tenant_id, input.chat_id, input.user_id),
         input.scope,
         input.tenant_id,
@@ -414,31 +566,28 @@ export function createSqliteStore(file: string): Store {
 
     async save_task(input) {
       if (!live) return
-      save_task.run(input.id, input.session_id, input.req ?? null, input.created_at, text(input))
+      saveTaskStmt.run(input.id, input.session_id, input.req_id ?? input.req ?? null, input.created_at, text(input))
     },
 
     async get_task(id) {
-      return parse<Task>(get_task.get(id)?.data ?? null)
+      return readTask(id)
     },
 
     async get_task_by_inbound(inbound_id) {
-      return parse<Task>(get_task_by_inbound.get(inbound_id)?.data ?? null)
+      return parse<Task>(getTaskByInboundStmt.get(inbound_id)?.data ?? null)
     },
 
     async get_last_task(session_id) {
-      return parse<Task>(get_last_task.get(session_id)?.data ?? null)
+      return parse<Task>(getLastTaskStmt.get(session_id)?.data ?? null)
     },
 
     async get_task_by_req(req) {
-      return parse<Task>(get_task_by_req.get(req)?.data ?? null)
+      return parse<Task>(getTaskByReqStmt.get(req)?.data ?? null)
     },
 
     async list_tasks(input) {
-      const all = list_tasks.all().flatMap((item) => {
-        const row = parse<Task>(item.data)
-        return row ? [row] : []
-      })
-      return all.filter((item) => {
+      const rows = parseRows<Task>(listTasksStmt.all())
+      return rows.filter((item) => {
         if (input?.status?.length && !input.status.includes(item.status)) return false
         if (input?.session_id && item.session_id !== input.session_id) return false
         if (input?.inbound_id && item.inbound_id !== input.inbound_id) return false
@@ -448,37 +597,37 @@ export function createSqliteStore(file: string): Store {
 
     async save_inbound(input) {
       if (!live) return
-      save_inbound.run(input.id, text(input))
+      saveInboundStmt.run(input.id, text(input))
     },
 
     async get_inbound(id) {
-      return parse<InboundEvent>(get_inbound.get(id)?.data ?? null)
+      return readInbound(id)
     },
 
     async save_job(input) {
       if (!live) return
-      save_job.run(input.id, input.status, input.created_at, input.updated_at, text(input))
+      saveJobStmt.run(input.id, input.status, input.created_at, input.updated_at, text(input))
     },
 
     async get_job(id) {
-      return parse<QueueJob>(get_job.get(id)?.data ?? null)
+      return parse<QueueJob>(getJobStmt.get(id)?.data ?? null)
     },
 
     async claim_job() {
-      const row = parse<QueueJob>(pick_job.get()?.data ?? null)
+      const row = parse<QueueJob>(pickJobStmt.get()?.data ?? null)
       if (!row || !live) return row
       const next = {
         ...row,
         status: "running" as const,
         updated_at: Date.now(),
       }
-      save_job.run(next.id, next.status, next.created_at, next.updated_at, text(next))
+      saveJobStmt.run(next.id, next.status, next.created_at, next.updated_at, text(next))
       return next
     },
 
     async done_job(id) {
       if (!live) return
-      const row = parse<QueueJob>(get_job.get(id)?.data ?? null)
+      const row = parse<QueueJob>(getJobStmt.get(id)?.data ?? null)
       if (!row) return
       const next = {
         ...row,
@@ -486,12 +635,12 @@ export function createSqliteStore(file: string): Store {
         err: undefined,
         updated_at: Date.now(),
       }
-      save_job.run(next.id, next.status, next.created_at, next.updated_at, text(next))
+      saveJobStmt.run(next.id, next.status, next.created_at, next.updated_at, text(next))
     },
 
     async fail_job(input) {
       if (!live) return
-      const row = parse<QueueJob>(get_job.get(input.id)?.data ?? null)
+      const row = parse<QueueJob>(getJobStmt.get(input.id)?.data ?? null)
       if (!row) return
       const next = {
         ...row,
@@ -499,38 +648,65 @@ export function createSqliteStore(file: string): Store {
         err: input.err,
         updated_at: Date.now(),
       }
-      save_job.run(next.id, next.status, next.created_at, next.updated_at, text(next))
+      saveJobStmt.run(next.id, next.status, next.created_at, next.updated_at, text(next))
     },
 
     async reset_jobs(input) {
       if (!live) return
       const time = Date.now()
-      for (const row of list_job.all().flatMap((item) => {
-        const row = parse<QueueJob>(item.data)
-        return row ? [row] : []
-      })) {
+      for (const row of parseRows<QueueJob>(listJobStmt.all())) {
         if (!input.from.includes(row.status)) continue
         const next = {
           ...row,
           status: input.to,
           updated_at: time,
         }
-        save_job.run(next.id, next.status, next.created_at, next.updated_at, text(next))
+        saveJobStmt.run(next.id, next.status, next.created_at, next.updated_at, text(next))
       }
     },
 
     async save_outbound(input) {
       if (!live) return
-      save_outbound.run(input.task_id, text(input))
+      saveOutboundStmt.run(input.task_id, text(input))
     },
 
     async get_outbound(task_id) {
-      return parse<Outbound>(get_outbound.get(task_id)?.data ?? null)
+      return parse<Outbound>(getOutboundStmt.get(task_id)?.data ?? null)
+    },
+
+    async save_assistant_outbound(input) {
+      if (!live) return
+      saveAssistantOutboundStmt.run(
+        input.id,
+        input.task_id,
+        input.session_id,
+        input.seq,
+        input.kind,
+        input.action,
+        input.state,
+        input.req_key ?? null,
+        input.terminal ? 1 : 0,
+        input.created_at,
+        input.updated_at,
+        text(input),
+      )
+    },
+
+    async get_assistant_outbound(id) {
+      return parse<AssistantOutbound>(getAssistantOutboundStmt.get(id)?.data ?? null)
+    },
+
+    async list_assistant_outbounds(task_id) {
+      return parseRows<AssistantOutbound>(listAssistantOutboundsStmt.all(task_id))
+    },
+
+    async list_open_waits(task_id) {
+      return parseRows<AssistantOutbound>(listOpenWaitsStmt.all(task_id))
     },
 
     async save_attachment(input) {
       if (!live) return
-      save_attachment.run(
+      saveAttachmentStmt.run(
         attachment(input.message_id, input.key),
         input.message_id,
         input.key,
@@ -540,39 +716,57 @@ export function createSqliteStore(file: string): Store {
     },
 
     async get_attachment(input) {
-      return parse<Attachment>(get_attachment.get(attachment(input.message_id, input.key))?.data ?? null)
+      return parse<Attachment>(getAttachmentStmt.get(attachment(input.message_id, input.key))?.data ?? null)
     },
 
     async save_pending(input) {
       if (!live) return
-      save_pending.run(input.session_id, text(input))
+      savePendingStmt.run(input.session_id, text(input))
     },
 
     async get_pending(session_id) {
-      return parse<Pending>(get_pending.get(session_id)?.data ?? null)
+      return readLegacyPending(session_id)
     },
 
     async drop_pending(session_id) {
       if (!live) return
-      drop_pending.run(session_id)
+      dropPendingStmt.run(session_id)
+    },
+
+    async save_task_pending(input) {
+      if (!live) return
+      saveTaskPendingStmt.run(input.task_id, input.session_id ?? null, input.created_at, input.updated_at, text(input))
+    },
+
+    async get_task_pending(task_id) {
+      const hit = parse<PendingAttachment>(getTaskPendingStmt.get(task_id)?.data ?? null)
+      if (hit) return hit
+      return migrateLegacyPending(task_id)
+    },
+
+    async drop_task_pending(task_id) {
+      if (!live) return
+      dropTaskPendingStmt.run(task_id)
+      const task = readTask(task_id)
+      if (task) dropPendingStmt.run(task.session_id)
     },
 
     async seen(val) {
-      return !!get_seen.get(val)
+      return !!getSeenStmt.get(val)
     },
 
     async mark(val) {
       if (!live) return
-      save_seen.run(val, Date.now())
+      saveSeenStmt.run(val, Date.now())
     },
 
     async get_conn(name) {
-      return parse<ConnState>(get_conn.get(name)?.data ?? null)
+      return parse<ConnState>(getConnStmt.get(name)?.data ?? null)
     },
 
     async set_conn(input) {
       if (!live) return
-      save_conn.run(input.name, text(input))
+      saveConnStmt.run(input.name, text(input))
     },
 
     async close() {

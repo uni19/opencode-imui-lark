@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises"
 import path from "node:path"
 import { Database } from "bun:sqlite"
 
-export const DB_SCHEMA_VERSION = 1
+export const DB_SCHEMA_VERSION = 2
 
 function ensure(file: string) {
   if (file === ":memory:") return file
@@ -81,6 +81,30 @@ export function schema(db: Database) {
       data TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS assistant_outbound (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      action TEXT NOT NULL,
+      state TEXT NOT NULL,
+      req_key TEXT,
+      terminal INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      data TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS assistant_outbound_task_seq_idx
+    ON assistant_outbound (task_id, seq);
+
+    CREATE INDEX IF NOT EXISTS assistant_outbound_wait_idx
+    ON assistant_outbound (task_id, state, seq);
+
+    CREATE INDEX IF NOT EXISTS assistant_outbound_req_idx
+    ON assistant_outbound (req_key, created_at);
+
     CREATE TABLE IF NOT EXISTS attachment (
       attachment_key TEXT PRIMARY KEY,
       message_id TEXT NOT NULL,
@@ -96,6 +120,17 @@ export function schema(db: Database) {
       session_id TEXT PRIMARY KEY,
       data TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS pending_attachment_task (
+      task_id TEXT PRIMARY KEY,
+      session_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      data TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS pending_attachment_task_session_idx
+    ON pending_attachment_task (session_id, updated_at);
 
     CREATE TABLE IF NOT EXISTS seen_event (
       key TEXT PRIMARY KEY,
@@ -118,11 +153,9 @@ export function migrateDb(db: Database) {
   if (from > DB_SCHEMA_VERSION) {
     throw new Error(`database schema version ${from} is newer than supported ${DB_SCHEMA_VERSION}`)
   }
-  if (from < 1) {
-    schema(db)
+  schema(db)
+  if (from < DB_SCHEMA_VERSION) {
     db.exec(`PRAGMA user_version = ${DB_SCHEMA_VERSION}`)
-  } else {
-    schema(db)
   }
   return {
     from,

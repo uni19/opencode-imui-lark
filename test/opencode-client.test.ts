@@ -1,3 +1,5 @@
+/// <reference types="bun-types" />
+import crypto from "node:crypto"
 import { afterEach, describe, expect, test } from "bun:test"
 import type { AppCfg } from "../src/contracts.ts"
 import { createOpencodeSvc } from "../src/opencode/client.ts"
@@ -21,71 +23,81 @@ afterEach(() => {
   globalThis.fetch = fetch0
 })
 
+function hash(entries: string[]) {
+  return crypto.createHash("sha256").update(JSON.stringify(entries)).digest("hex")
+}
+
+function mock_fetch(data: unknown) {
+  globalThis.fetch = Object.assign(
+    async (..._args: Parameters<typeof fetch>) =>
+      new Response(JSON.stringify(data), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+    {
+      preconnect: fetch0.preconnect.bind(fetch0),
+    },
+  )
+}
+
 describe("opencode client", () => {
   test("last picks the newest assistant message with text output", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify([
-          {
-            info: {
-              role: "assistant",
-            },
-            parts: [
-              {
-                type: "text",
-                text: "第一条有效回复",
-                time: {
-                  end: 1,
-                },
-              },
-            ],
-          },
-          {
-            info: {
-              role: "assistant",
-            },
-            parts: [
-              {
-                type: "step-start",
-              },
-            ],
-          },
-          {
-            info: {
-              role: "assistant",
-            },
-            parts: [
-              {
-                type: "text",
-                text: "最新有效回复",
-                time: {
-                  end: 2,
-                },
-              },
-            ],
-          },
-          {
-            info: {
-              role: "assistant",
-            },
-            parts: [
-              {
-                type: "text",
-                text: "",
-                time: {
-                  end: 3,
-                },
-              },
-            ],
-          },
-        ]),
-        {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-          },
+    mock_fetch([
+      {
+        info: {
+          role: "assistant",
         },
-      )) as typeof fetch0
+        parts: [
+          {
+            type: "text",
+            text: "第一条有效回复",
+            time: {
+              end: 1,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+        },
+        parts: [
+          {
+            type: "step-start",
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+        },
+        parts: [
+          {
+            type: "text",
+            text: "最新有效回复",
+            time: {
+              end: 2,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+        },
+        parts: [
+          {
+            type: "text",
+            text: "",
+            time: {
+              end: 3,
+            },
+          },
+        ],
+      },
+    ])
 
     const svc = createOpencodeSvc(cfg())
     expect(
@@ -96,54 +108,45 @@ describe("opencode client", () => {
   })
 
   test("last ignores synthetic and ignored text parts", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify([
-          {
-            info: {
-              role: "assistant",
-            },
-            parts: [
-              {
-                type: "text",
-                text: 'Called the Read tool with the following input: {"filePath":"/tmp/a.png"}',
-                synthetic: true,
-                time: {
-                  end: 1,
-                },
-              },
-              {
-                type: "text",
-                text: "真正应该展示的回复",
-                time: {
-                  end: 2,
-                },
-              },
-            ],
-          },
-          {
-            info: {
-              role: "assistant",
-            },
-            parts: [
-              {
-                type: "text",
-                text: "只给模型自己看的补充",
-                ignored: true,
-                time: {
-                  end: 3,
-                },
-              },
-            ],
-          },
-        ]),
-        {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-          },
+    mock_fetch([
+      {
+        info: {
+          role: "assistant",
         },
-      )) as typeof fetch0
+        parts: [
+          {
+            type: "text",
+            text: 'Called the Read tool with the following input: {"filePath":"/tmp/a.png"}',
+            synthetic: true,
+            time: {
+              end: 1,
+            },
+          },
+          {
+            type: "text",
+            text: "真正应该展示的回复",
+            time: {
+              end: 2,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+        },
+        parts: [
+          {
+            type: "text",
+            text: "只给模型自己看的补充",
+            ignored: true,
+            time: {
+              end: 3,
+            },
+          },
+        ],
+      },
+    ])
 
     const svc = createOpencodeSvc(cfg())
     expect(
@@ -154,48 +157,39 @@ describe("opencode client", () => {
   })
 
   test("last prefers completed assistant text over newer unfinished draft", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify([
-          {
-            info: {
-              role: "assistant",
-              time: {
-                completed: 1,
-              },
-            },
-            parts: [
-              {
-                type: "text",
-                text: "真正的最终回复",
-                time: {
-                  end: 1,
-                },
-              },
-            ],
-          },
-          {
-            info: {
-              role: "assistant",
-            },
-            parts: [
-              {
-                type: "text",
-                text: "我先看看这个目录……",
-                time: {
-                  end: 2,
-                },
-              },
-            ],
-          },
-        ]),
-        {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
+    mock_fetch([
+      {
+        info: {
+          role: "assistant",
+          time: {
+            completed: 1,
           },
         },
-      )) as typeof fetch0
+        parts: [
+          {
+            type: "text",
+            text: "真正的最终回复",
+            time: {
+              end: 1,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+        },
+        parts: [
+          {
+            type: "text",
+            text: "我先看看这个目录……",
+            time: {
+              end: 2,
+            },
+          },
+        ],
+      },
+    ])
 
     const svc = createOpencodeSvc(cfg())
     expect(
@@ -206,55 +200,46 @@ describe("opencode client", () => {
   })
 
   test("last prefers healthy completed text over newer errored assistant text", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify([
-          {
-            info: {
-              role: "assistant",
-              time: {
-                completed: 1,
-              },
-            },
-            parts: [
-              {
-                type: "text",
-                text: "稳定的最终答复",
-                time: {
-                  end: 1,
-                },
-              },
-            ],
-          },
-          {
-            info: {
-              role: "assistant",
-              time: {
-                completed: 2,
-              },
-              error: {
-                name: "APIError",
-                message: "boom",
-              },
-            },
-            parts: [
-              {
-                type: "text",
-                text: "中途失败前留下的半成品",
-                time: {
-                  end: 2,
-                },
-              },
-            ],
-          },
-        ]),
-        {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
+    mock_fetch([
+      {
+        info: {
+          role: "assistant",
+          time: {
+            completed: 1,
           },
         },
-      )) as typeof fetch0
+        parts: [
+          {
+            type: "text",
+            text: "稳定的最终答复",
+            time: {
+              end: 1,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+          time: {
+            completed: 2,
+          },
+          error: {
+            name: "APIError",
+            message: "boom",
+          },
+        },
+        parts: [
+          {
+            type: "text",
+            text: "中途失败前留下的半成品",
+            time: {
+              end: 2,
+            },
+          },
+        ],
+      },
+    ])
 
     const svc = createOpencodeSvc(cfg())
     expect(
@@ -265,52 +250,43 @@ describe("opencode client", () => {
   })
 
   test("last ignores newer summary assistant text", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify([
-          {
-            info: {
-              role: "assistant",
-              time: {
-                completed: 1,
-              },
-            },
-            parts: [
-              {
-                type: "text",
-                text: "真正发给用户的回复",
-                time: {
-                  end: 1,
-                },
-              },
-            ],
-          },
-          {
-            info: {
-              role: "assistant",
-              summary: true,
-              time: {
-                completed: 2,
-              },
-            },
-            parts: [
-              {
-                type: "text",
-                text: "系统内部总结，不该发到飞书",
-                time: {
-                  end: 2,
-                },
-              },
-            ],
-          },
-        ]),
-        {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
+    mock_fetch([
+      {
+        info: {
+          role: "assistant",
+          time: {
+            completed: 1,
           },
         },
-      )) as typeof fetch0
+        parts: [
+          {
+            type: "text",
+            text: "真正发给用户的回复",
+            time: {
+              end: 1,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+          summary: true,
+          time: {
+            completed: 2,
+          },
+        },
+        parts: [
+          {
+            type: "text",
+            text: "系统内部总结，不该发到飞书",
+            time: {
+              end: 2,
+            },
+          },
+        ],
+      },
+    ])
 
     const svc = createOpencodeSvc(cfg())
     expect(
@@ -320,54 +296,150 @@ describe("opencode client", () => {
     ).toBe("真正发给用户的回复")
   })
 
-  test("result reports filtered when only hidden assistant text exists", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify([
-          {
-            info: {
-              role: "assistant",
-              summary: true,
-              time: {
-                completed: 1,
-              },
-            },
-            parts: [
-              {
-                type: "text",
-                text: "内部总结",
-                time: {
-                  end: 1,
-                },
-              },
-            ],
-          },
-          {
-            info: {
-              role: "assistant",
-              time: {
-                completed: 2,
-              },
-            },
-            parts: [
-              {
-                type: "text",
-                text: "Called the Read tool",
-                synthetic: true,
-                time: {
-                  end: 2,
-                },
-              },
-            ],
-          },
-        ]),
-        {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
+  test("result exposes visible entries oldest-first with deterministic hash", async () => {
+    const entries = ["较早完成的正式答复", "失败前仍对用户可见的说明", "后来的可见草稿"]
+
+    mock_fetch([
+      {
+        info: {
+          role: "assistant",
+          time: {
+            completed: 1,
           },
         },
-      )) as typeof fetch0
+        parts: [
+          {
+            type: "text",
+            text: `  ${entries[0]}  `,
+            time: {
+              end: 1,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+          summary: true,
+          time: {
+            completed: 2,
+          },
+        },
+        parts: [
+          {
+            type: "text",
+            text: "内部总结，不该进入可见历史",
+            time: {
+              end: 2,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+          time: {
+            completed: 3,
+          },
+          error: {
+            name: "APIError",
+            message: "boom",
+          },
+        },
+        parts: [
+          {
+            type: "text",
+            text: entries[1],
+            time: {
+              end: 3,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+        },
+        parts: [
+          {
+            type: "text",
+            text: entries[2],
+            time: {
+              end: 4,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+        },
+        parts: [
+          {
+            type: "text",
+            text: "Called the Read tool",
+            synthetic: true,
+            time: {
+              end: 5,
+            },
+          },
+        ],
+      },
+    ])
+
+    const svc = createOpencodeSvc(cfg())
+    expect(
+      await svc.result?.({
+        session_id: "ses_1",
+      }),
+    ).toEqual({
+      state: "ok",
+      text: entries[0],
+      entries,
+      hash: hash(entries),
+      completed: false,
+    })
+  })
+
+  test("result reports filtered when only hidden assistant text exists", async () => {
+    mock_fetch([
+      {
+        info: {
+          role: "assistant",
+          summary: true,
+          time: {
+            completed: 1,
+          },
+        },
+        parts: [
+          {
+            type: "text",
+            text: "内部总结",
+            time: {
+              end: 1,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+          time: {
+            completed: 2,
+          },
+        },
+        parts: [
+          {
+            type: "text",
+            text: "Called the Read tool",
+            synthetic: true,
+            time: {
+              end: 2,
+            },
+          },
+        ],
+      },
+    ])
 
     const svc = createOpencodeSvc(cfg())
     expect(
@@ -376,90 +448,74 @@ describe("opencode client", () => {
       }),
     ).toEqual({
       state: "filtered",
+      completed: true,
     })
   })
 
   test("result reports filtered when only unfinished internal draft text exists", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify([
-          {
-            info: {
-              role: "assistant",
-            },
-            parts: [
-              {
-                type: "text",
-                text: "Reading /tmp/cache/image.png to inspect the attachment",
-                time: {
-                  end: 1,
-                },
-                synthetic: true,
-              },
-            ],
-          },
-        ]),
-        {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-          },
+    mock_fetch([
+      {
+        info: {
+          role: "assistant",
         },
-      )) as typeof fetch0
+        parts: [
+          {
+            type: "text",
+            text: "Reading /tmp/cache/image.png to inspect the attachment",
+            time: {
+              end: 1,
+            },
+            synthetic: true,
+          },
+        ],
+      },
+    ])
 
     const svc = createOpencodeSvc(cfg())
     expect(
       await svc.result?.({
         session_id: "ses_1",
       }),
-    ).toEqual({
+    ).toMatchObject({
       state: "filtered",
+      completed: false,
     })
   })
 
   test("last prefers completed user-facing text over newer partial assistant draft", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify([
-          {
-            info: {
-              role: "assistant",
-              time: {
-                completed: 1,
-              },
-            },
-            parts: [
-              {
-                type: "text",
-                text: "最终给用户的结论",
-                time: {
-                  end: 1,
-                },
-              },
-            ],
-          },
-          {
-            info: {
-              role: "assistant",
-            },
-            parts: [
-              {
-                type: "text",
-                text: "我先继续读取 /tmp/cache/file.pdf 再整理一下",
-                time: {
-                  end: 2,
-                },
-              },
-            ],
-          },
-        ]),
-        {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
+    mock_fetch([
+      {
+        info: {
+          role: "assistant",
+          time: {
+            completed: 1,
           },
         },
-      )) as typeof fetch0
+        parts: [
+          {
+            type: "text",
+            text: "最终给用户的结论",
+            time: {
+              end: 1,
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: "assistant",
+        },
+        parts: [
+          {
+            type: "text",
+            text: "我先继续读取 /tmp/cache/file.pdf 再整理一下",
+            time: {
+              end: 2,
+            },
+          },
+        ],
+      },
+    ])
 
     const svc = createOpencodeSvc(cfg())
     expect(

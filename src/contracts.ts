@@ -67,11 +67,14 @@ export type ImSession = {
   updated_at: number
 }
 
+export type TaskTerminalKind = "final" | "error" | "aborted"
+
 export type Task = {
   id: string
   im_session_id: string
   session_id: string
   inbound_id: string
+  reply_anchor_message_id?: string
   directory?: string
   workspace_id?: string
   outbound_id?: string
@@ -87,7 +90,12 @@ export type Task = {
     | "failed"
     | "aborted"
   req_type?: "permission" | "question" | "attachment"
+  req_id?: string
   req?: string
+  result_hash?: string
+  terminal_kind?: TaskTerminalKind
+  terminal_outbound_id?: string
+  superseded_by_task_id?: string
   err?: string
   created_at: number
   updated_at: number
@@ -97,6 +105,48 @@ export type Pending = {
   session_id: string
   inbound_id: string
   assets: Asset[]
+  created_at: number
+  updated_at: number
+}
+
+export type PendingAttachment = {
+  task_id: string
+  session_id?: string
+  origin_inbound_id: string
+  origin_message_id?: string
+  assets: Asset[]
+  created_at: number
+  updated_at: number
+}
+
+export type AssistantOutboundKind =
+  | "ack"
+  | "progress"
+  | "approval"
+  | "question"
+  | "attachment"
+  | "intermediate"
+  | "final"
+  | "error"
+
+export type AssistantOutboundAction = "reply" | "patch" | "deferred"
+
+export type AssistantOutboundState = "emitted" | "open" | "resolved"
+
+export type AssistantOutbound = {
+  id: string
+  task_id: string
+  session_id: string
+  seq: number
+  kind: AssistantOutboundKind
+  action: AssistantOutboundAction
+  state: AssistantOutboundState
+  origin_inbound_id: string
+  origin_message_id: string
+  req_key?: string
+  terminal: boolean
+  feishu_message_id?: string
+  payload: unknown
   created_at: number
   updated_at: number
 }
@@ -221,6 +271,9 @@ export type OpencodeMcp = {
 export type OpencodeResult = {
   state: "ok" | "filtered" | "empty"
   text?: string
+  entries?: string[]
+  hash?: string
+  completed?: boolean
 }
 
 export type FeishuMode = "stdin" | "long_conn" | "off"
@@ -318,11 +371,29 @@ export type SessionSvc = {
 }
 
 export type TaskSvc = {
-  add(input: { im_session_id: string; session_id: string; inbound_id: string; directory?: string; workspace_id?: string }): Promise<Task>
+  add(input: {
+    im_session_id: string
+    session_id: string
+    inbound_id: string
+    reply_anchor_message_id?: string
+    directory?: string
+    workspace_id?: string
+  }): Promise<Task>
   ack(id: string): Promise<void>
   run(id: string): Promise<void>
   wait(input: { id: string; req_type: "permission" | "question"; req: string }): Promise<void>
   hold(id: string): Promise<void>
+  checkpoint(input: { id: string; result_hash?: string; note?: string }): Promise<void>
+  close(input: {
+    id: string
+    status: "completed" | "failed" | "aborted"
+    terminal_kind?: TaskTerminalKind
+    terminal_outbound_id?: string
+    result_hash?: string
+    err?: string
+    note?: string
+  }): Promise<boolean>
+  supersede(input: { id: string; superseded_by_task_id: string }): Promise<void>
   done(id: string, note?: string): Promise<void>
   fail(input: { id: string; err: string; note?: string }): Promise<void>
   abort(id: string, note?: string): Promise<void>
@@ -374,6 +445,7 @@ export type Render = {
   progress(input: { text: string; step?: string }): RenderOut
   approval(input: { req: string; tool: string; detail: string }): RenderOut
   question(input: { req: string; title: string; opts?: string[]; custom?: boolean }): RenderOut
+  intermediate(input: { text: string }): RenderOut
   final(input: { text: string }): RenderOut
   err(input: { text: string }): RenderOut
 }
@@ -400,11 +472,18 @@ export type Store = {
   reset_jobs(input: { from: QueueJob["status"][]; to: QueueJob["status"] }): Promise<void>
   save_outbound(input: Outbound): Promise<void>
   get_outbound(task_id: string): Promise<Outbound | null>
+  save_assistant_outbound(input: AssistantOutbound): Promise<void>
+  get_assistant_outbound(id: string): Promise<AssistantOutbound | null>
+  list_assistant_outbounds(task_id: string): Promise<AssistantOutbound[]>
+  list_open_waits(task_id: string): Promise<AssistantOutbound[]>
   save_attachment(input: Attachment): Promise<void>
   get_attachment(input: { message_id: string; key: string }): Promise<Attachment | null>
   save_pending(input: Pending): Promise<void>
   get_pending(session_id: string): Promise<Pending | null>
   drop_pending(session_id: string): Promise<void>
+  save_task_pending(input: PendingAttachment): Promise<void>
+  get_task_pending(task_id: string): Promise<PendingAttachment | null>
+  drop_task_pending(task_id: string): Promise<void>
   seen(key: string): Promise<boolean>
   mark(key: string): Promise<void>
   get_conn(name: ConnState["name"]): Promise<ConnState | null>

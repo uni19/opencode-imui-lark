@@ -51,11 +51,21 @@ export function createRender(): Render {
       })
     },
 
+    intermediate(input) {
+      return card({
+        title: "OpenCode",
+        template: "green",
+        state: "intermediate",
+        text: [`阶段性更新（后台仍在继续）`, input.text].join("\n\n"),
+      })
+    },
+
     final(input) {
       return card({
         title: "OpenCode",
         template: "green",
-        text: input.text,
+        state: "final",
+        text: [`最终完成`, input.text].join("\n\n"),
       })
     },
 
