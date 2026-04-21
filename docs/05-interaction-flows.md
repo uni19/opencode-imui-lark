@@ -1,185 +1,158 @@
-# 05 Interaction Flows
+# 05 交互流
 
-## 流程 1: 普通对话
+## 文档状态
+
+本文描述 OMO 目标交互流。当前代码已经有后台 session 切换、wait replay、progress flush、patch fallback 等基础，但仍然带着“单 task 单可见消息、idle 直接完成”的旧语义。下面是需要收敛到的目标流程。
+
+## 流程 1：普通 OMO 轮次
 
 ```text
 User -> Feishu
-Feishu -> Long Connection Client (im.message.receive_v1)
+Feishu -> Long Connection Client
 Long Connection Client -> Gateway Queue
-Long Connection Client -> Ack Feishu
 Gateway Queue -> SessionRouter
-SessionRouter -> OpenCode session.create? -> Gateway Worker
+SessionRouter -> resolve/reset session
+Gateway Worker -> create Task
 Gateway Worker -> OpenCode session.prompt_async
-Gateway Worker -> Feishu ack message
-OpenCode -> Event Bridge (/event)
-Event Bridge -> Feishu progress updates
+Gateway Worker -> Feishu ack
+OpenCode -> message.* / tool progress
+Gateway -> assistant_outbound(progress)
+Gateway -> patch current visible slot
 OpenCode -> session.status=idle
-Event Bridge -> Feishu final message
+Gateway -> reconcile(result_hash, unresolved waits)
+Gateway -> no-op | intermediate card | final card
 ```
 
 ### 关键点
 
-- 长连接线程不等待模型完成
-- 长连接线程只做入队和快速确认
-- 飞书侧先发占位消息，避免用户误以为机器人无响应
-- 文本增量要节流，避免飞书更新频率过高
+- `idle` 是 checkpoint，不是直接完成
+- 同一个 task 可以经历多次 `idle -> reconcile`
+- 如果 `result_hash` 没变，重复 idle 必须是 no-op
+- 如果有新的用户可见阶段性结果，但 task 仍非终态，可以发一张“中间完成态”卡片
+- 只有当没有 unresolved wait，且 reconciliation 找到真实 final candidate 时，才发送“最终完成态”卡片并关闭 task
 
-## 流程 2: 权限审批
-
-```text
-OpenCode -> permission.asked
-Event Bridge -> Gateway
-Gateway -> Feishu approval card
-User -> reply 1 / 2 / 3
-Feishu -> Long Connection Client (im.message.receive_v1)
-Long Connection Client -> Gateway Queue
-Gateway Queue -> OpenCode permission.reply
-OpenCode -> continue execution
-Event Bridge -> Feishu progress/final
-```
-
-### 设计细节
-
-- 审批回复需要和当前活跃任务绑定，避免迟到消息串到新任务
-- 审批回复只使用数字序号 `1 / 2 / 3` 做选择
-- 如果用户直接发送其他文本，则视为“更正当前操作并继续执行”
-- 审批消息应带工具名、模式、风险说明和 requestID
-
-## 流程 3: 问题回问
+## 流程 2：权限 / 追问都挂在同一个 task 下
 
 ```text
-OpenCode -> question.asked
-Event Bridge -> Gateway
-Gateway -> Feishu question card
-User -> reply option index or free text
-Feishu -> Long Connection Client (im.message.receive_v1)
-Long Connection Client -> Gateway Queue
-Gateway Queue -> OpenCode question.reply
-OpenCode -> continue execution
+OpenCode -> permission.asked / question.asked
+Gateway -> append assistant_outbound(wait)
+Gateway -> if foreground && head wait: visible card
+Gateway -> else: deferred only
+User -> reply 1 / 2 / 3 or free text
+Gateway -> bind reply to foreground task head wait
+Gateway -> OpenCode permission.reply / question.reply
+OpenCode -> continue execution on same task
 ```
 
-### 设计细节
+### 关键点
 
-- `Question.Info` 天然支持 options、多选和 custom 输入
-- 飞书卡片要能表达“选项序号”和“手动补充”
-- 存在选项时优先使用数字序号；如问题允许自定义回答，也可直接发送文本
-- 回答后应更新原卡片状态，避免用户误以为还未提交
+- 不再为后续 `permission.asked` / `question.asked` 克隆 task
+- wait 历史属于同一个 task 的 child outbounds
+- 同一前台 thread 同时只展示一个 head wait
+- 后续 wait 可以先在后台排队，等前一个 wait 解决后再 visible
+- 自由文本只能绑定前台 task 的 head unresolved wait
 
-## 流程 4: 用户取消
+## 流程 3：附件-only hold
 
 ```text
-User -> Feishu (/abort)
-Gateway -> OpenCode session.abort
-OpenCode -> session.status / session.error / idle
-Event Bridge -> Feishu aborted message
+User -> send files/images only
+Gateway -> create Task
+Gateway -> save task-owned pending_attachment
+Gateway -> visible prompt: 请补一条文字说明
+User -> send follow-up text
+Gateway -> merge text + pending assets
+Gateway -> OpenCode session.prompt_async
 ```
 
-### 设计细节
+### 关键点
 
-- 如果 session 已经 idle，取消应该提示“当前没有执行中的任务”
-- 取消命令只对当前活跃任务可用
+- 附件等待的归属是 `task_id`，不是 `session_id`
+- `/new`、`/session`、recover 都不能把这个 hold 丢掉
+- 如果用户切走，这个 wait 进入 deferred 状态；切回时再 replay
 
-## 流程 5: 出错
-
-错误来源可能有三类：
-
-### 飞书侧错误
-
-- 长连接断开
-- 长连接事件解析失败
-- 消息发送失败
-
-处理建议：
-
-- 长连接客户端自动重连
-- 后台写错误日志和原始 payload
-- 如可恢复，进入重试队列
-
-### Gateway 侧错误
-
-- 数据库错误
-- 路由找不到 repo
-- 幂等表异常
-
-处理建议：
-
-- 对用户显示友好错误
-- 对后台记录详细堆栈和 trace id
-
-### OpenCode 侧错误
-
-- `session.error`
-- provider auth 失败
-- context overflow
-- permission reject
-
-处理建议：
-
-- 将错误映射为用户可读消息
-- 对明确可恢复的错误给出下一步建议
-
-## 节流和渲染策略
-
-IM 不适合像 Web 一样持续高频刷新。
-
-建议规则：
-
-- 文本增量 1 到 2 秒合并一次
-- 工具状态变化立即刷新
-- 审批和问题事件立即发送卡片
-- 完成和失败立即发送最终更新
-
-## 文本渲染建议
-
-### 执行中
-
-优先展示：
-
-- 当前阶段
-- 最近工具动作
-- 已汇总文本片段
-
-### 完成后
-
-优先展示：
-
-- 最终答案
-- 如果有文件改动，给出简短 diff 摘要
-- 如果需要，附“查看详情”链接
-
-### 超长内容
-
-- 飞书正文只放摘要
-- 完整输出可折叠、分段，或落外链
-
-## 长连接特有流程
-
-## 流程 6: 长连接重连
+## 流程 4：后台 session 切换与 wait replay
 
 ```text
-Feishu Long Connection -> disconnected
-Conn Manager -> mark reconnecting
-Conn Manager -> retry with backoff
-Conn Manager -> mark ready
+User -> /session <old> or /new
+Gateway -> switch/reset foreground session pointer
+Old live task -> continue in background
+Background task -> permission.asked / question.asked / waiting_attachment
+Gateway -> append deferred assistant_outbound only
+User -> switch back to old session
+Gateway -> replay head unresolved wait
 ```
 
-### 设计细节
+### 关键点
 
-- 连接状态需要持久化到监控或状态表
-- 重连期间不应丢掉内部执行状态
-- 如果重连失败次数过多，需要告警
+- `/session` 与 `/new` 不再默认中止旧 live task
+- 后台 wait 只落账，不抢当前前台 thread
+- replay 的目标是“当前队头 unresolved wait”，不是把旧历史全部重贴一遍
+- 背景 task 即使失去前台 session 映射，仍然保留自己的 reply anchor
 
-## 流程 7: 多实例冲突
+## 流程 5：superseding prompt 与 fresh-session rotation
 
 ```text
-Instance A -> connect
-Instance B -> connect
-Feishu -> random event delivery
-Gateway state -> split risk
+Foreground task A -> queued/acked/running
+User -> send a new normal prompt
+Gateway -> SessionSvc.reset(...)
+Gateway -> create fresh OpenCode session B
+Gateway -> create task B on session B
+Task A -> mark superseded_by_task_id = B
+Task A -> continue in background
 ```
 
-### 设计细节
+### 关键点
 
-- 首版只允许一个活跃消费者
-- 通过进程锁、数据库锁或 leader 选举保证单活
-- 禁止无控制地横向扩容长连接消费者
+- 新普通 prompt 不能和旧 live nonterminal task 共享同一个 OpenCode session
+- 这里的 rotation 是 thread 前台视角的切换，不是取消旧任务
+- task A 完成后仍然 reply 到自己的 originating message，而不是劫持 task B 的 thread 前台槽位
+
+## 流程 6：用户中止与终态幂等
+
+```text
+User -> /abort
+Gateway -> abort current foreground session/task
+OpenCode -> session.error / idle / abort completion
+Gateway -> close terminal once
+Late idle/error -> ignored
+```
+
+### 关键点
+
+- `/abort` 只针对当前前台 live task
+- 如果 task 已经 terminal，重复 `/abort` 只能给用户提示，不应重写状态
+- `session.error`、late idle、recover 补偿都必须经过 terminal idempotency 检查
+- abort 时要按 `task_id` 清理 pending attachment
+
+## 流程 7：重连、恢复与 watchdog
+
+```text
+Message conn / OpenCode SSE -> reconnecting
+Gateway -> throttle visible status updates
+Gateway -> recover/resume/sweep/probe
+Gateway -> rerun reconciliation on live tasks
+Gateway -> replay waits only for foreground session
+```
+
+### 关键点
+
+- reconnect/watch 语义继续保留，但不能再把 `idle` 直接当终态
+- recover/resume/sweep 不能重新关闭已经 terminal 的 task
+- 背景 wait 在恢复链路里仍然保持 deferred，直到对应 session 回到前台
+
+## 渲染与节流规则
+
+- progress 仍然按 1~2 秒窗口节流 patch
+- 工具状态变化可以更快更新，但不能刷屏
+- patch 失败时允许退化为新 reply / 新 message
+- 这种退化必须追加新的 child outbound，并推进 visible slot 指针，而不是覆盖历史
+- intermediate 与 final 必须显式区分，至少要告诉用户“还有后台任务”还是“已经最终完成”
+
+## 必须保住的交互不变量
+
+- 一次用户轮次只对应一个 task
+- 一个 task 可以拥有多个 `assistant_outbound`
+- 同一前台 thread 只展示一个可见 wait
+- 背景 wait 延迟显示，切回时 replay
+- 中间完成态与最终完成态必须区分
+- 背景完成态仍然回复到 originating reply anchor
