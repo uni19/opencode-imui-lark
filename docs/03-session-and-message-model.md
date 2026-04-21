@@ -1,12 +1,14 @@
-# 03 Session And Message Model
+# 03 会话与消息模型
 
-## 核心对象
+## 文档状态
 
-## 1. IM 会话
+本文定义 OMO 目标数据模型。当前代码仍保留 `Outbound` 单行镜像、session-owned `Pending`、以及等待态 task 克隆等兼容结构；这些兼容结构在迁移期存在，但不再是目标语义。
 
-IM 会话是外部概念，用于表达用户在哪个聊天上下文中发起了请求。
+## 三个主对象
 
-建议字段：
+### 1. ImSession：前台 thread -> foreground session 指针
+
+`ImSession` 描述的是“当前这个 Feishu thread 前台绑定到哪个 OpenCode session”，它解决的是前台路由，而不是所有活跃任务的全局真相。
 
 ```ts
 type ImSession = {
@@ -26,44 +28,101 @@ type ImSession = {
 }
 ```
 
-## 2. OpenCode Session
+要点：
 
-OpenCode session 是实际执行上下文，具备历史消息、标题、summary、权限规则等状态。
+- 私聊默认以 `chat_id` 维持一个前台 session 指针
+- 群聊默认以 `thread_id` 或 `root_message_id` 隔离
+- 同一个 thread 任何时刻只有一个 foreground session 指针
+- 旧 task 可以在后台继续跑，但不会因此改写当前前台指针
 
-首版建议：
+### 2. Task：一次 originating user turn
 
-- 一个飞书线程绑定一个 OpenCode session
-- 私聊默认可简化为“一个 chat 一个活跃 session”
-- 群聊必须以 thread 或 root message 为单位隔离
-
-## 3. Inbound Envelope
-
-飞书长连接进入系统后的标准化载荷。
+Task 对应一次真实的用户轮次，而不是一次“可见等待交互”。
 
 ```ts
-type InboundEnvelope = {
+type Task = {
   id: string
-  platform: "feishu"
-  channel: "long_conn"
-  kind: "message"
-  event_id: string
-  tenant_id: string
-  raw: unknown
+  im_session_id: string
+  session_id: string
+  inbound_id: string
+  reply_anchor_message_id: string
+  status:
+    | "queued"
+    | "acked"
+    | "running"
+    | "waiting_permission"
+    | "waiting_question"
+    | "waiting_attachment"
+    | "completed"
+    | "failed"
+    | "aborted"
+  req_type?: "permission" | "question" | "attachment"
+  req_id?: string
+  note?: string
+  outbound_id?: string // compat: 当前可 patch 槽位
+  result_hash?: string
+  terminal_kind?: "final" | "error" | "aborted"
+  terminal_outbound_id?: string
+  superseded_by_task_id?: string
   created_at: number
+  updated_at: number
 }
 ```
 
-## 4. Inbound Message
+要点：
 
-消息事件转成统一的业务消息。
+- `reply_anchor_message_id` 是所有 Feishu reply 的不可变锚点
+- `req_type` / `req_id` 只描述当前前台可见的 head wait，不代表完整 wait 历史
+- `outbound_id` 只是兼容窗口里的可见槽位指针，不再代表“这个 task 只有一个 outbound”
+- `superseded_by_task_id` 用来记录“新 prompt 抢前台后，旧 task 进入后台继续跑”的关系
+
+### 3. AssistantOutbound：助手发言账本
+
+每个 task 拥有 1:N 的 `assistant_outbound` 子记录，所有助手侧发言都落在这里。
 
 ```ts
-type InboundMessage = {
+type AssistantOutbound = {
   id: string
-  envelope_id: string
-  im_session_id: string
-  user_id: string
-  text: string
+  task_id: string
+  session_id: string
+  seq: number
+  kind:
+    | "ack"
+    | "progress"
+    | "approval"
+    | "question"
+    | "intermediate"
+    | "final"
+    | "error"
+  action: "reply" | "patch" | "deferred"
+  origin_inbound_id: string
+  origin_message_id: string
+  req_key?: string
+  terminal: boolean
+  feishu_message_id?: string
+  payload: unknown
+  created_at: number
+  updated_at: number
+}
+```
+
+要点：
+
+- `seq` 在单个 task 内单调递增
+- `action="deferred"` 表示事件已经落账，但当前不应该立刻在前台 thread 里显示
+- `terminal=true` 只允许出现在 `final` 或 `error` 上
+- 同一个 task 可以有很多条 `progress` / `intermediate`，但终态最多一条
+
+### 4. PendingAttachment：task-owned hold
+
+attachment-only 输入不再挂在 session 上，而是挂在具体 task 上。
+
+```ts
+type PendingAttachment = {
+  task_id: string
+  session_id: string
+  origin_inbound_id: string
+  origin_message_id: string
   assets: Array<{
     kind: "image" | "file"
     key: string
@@ -72,251 +131,112 @@ type InboundMessage = {
     path?: string
     url?: string
   }>
-  command?: {
-    name: string
-    args: string
-  }
-  event_type: "im.message.receive_v1"
   created_at: number
+  updated_at: number
 }
 ```
 
-## 5. Outbound Message
+这样 `/new`、`/session`、recover、background completion 都不会把附件等待串到别的 task。
 
-发送回飞书的消息记录。
+### 5. VisibleOutboundMirror：兼容窗口
+
+迁移期仍然保留一个“当前可 patch 槽位”的兼容镜像：
 
 ```ts
-type OutboundMessage = {
-  id: string
-  im_session_id: string
-  feishu_message_id: string
-  kind: "ack" | "progress" | "approval" | "question" | "final" | "error"
-  status: "sent" | "updated" | "failed"
-  session_id: string
-  request_id?: string
+type VisibleOutboundMirror = {
+  task_id: string
+  msg_id: string
+  kind: string
   payload: unknown
   created_at: number
   updated_at: number
 }
 ```
 
-## 幂等主键
+它的语义是“当前前台槽位长什么样”，不是“任务所有 outbound 的完整历史”。完整历史必须看 `assistant_outbound`。
 
-长连接模式仍然需要按飞书事件 ID 做幂等处理。
+## 事件语义
 
-建议来源：
+### 1. `message.updated` / `message.part.updated`
 
-- 消息事件：使用飞书事件头中的 `event_id`
-- 卡片动作：使用动作事件 ID 或由 `request_id + action + user_id` 派生
+- 产生 `progress` 或 `intermediate` 类 `assistant_outbound`
+- 允许节流 patch 当前可见槽位
+- 不直接决定 task 完成
 
-无论是消息事件还是卡片动作，都应在进入业务处理前先写入幂等表。
+### 2. `permission.asked` / `question.asked`
 
-## 事件模型
+- 在同一个 task 下追加 unresolved wait outbound
+- 如果当前 task 在前台且该 wait 是队头，则立刻可见
+- 如果 task 已在后台，或该 wait 不是当前队头，则只记为 `deferred`
 
-IMUI 只需要关心少量关键事件。
+### 3. `session.status=idle`
 
-## 1. 执行启动
+- 只记录 checkpoint，不直接把 task 置为 `completed`
+- 需要结合 `result_hash` 和 unresolved wait 做 reconciliation
+- 重复收到相同 `result_hash` 的 idle checkpoint 必须是幂等 no-op
 
-- `message.updated`
-- assistant message 创建成功
+### 4. `session.error`
 
-用途：
+- 如果 task 尚未 terminal，可产生唯一的 terminal error outbound
+- 如果 task 已 terminal，后续 error 只能视为幂等命中，不能二次收口
 
-- 创建或更新“处理中”占位消息
+### 5. 用户回复与继续执行
 
-## 2. 文本增量
+- `permission.replied`、`question.replied`、附件补充文本都继续推进同一个 task
+- 这些回复不应新建 task，更不应把 wait 回答串给后台的别的 task
 
-- `message.part.delta`
-- `message.part.updated`
-
-用途：
-
-- 收集文本片段
-- 做节流后刷新执行中消息
-
-首版建议不逐 token 更新飞书消息，而是基于 1 到 2 秒窗口聚合。
-
-## 3. 工具调用
-
-- `message.part.updated`
-- 其中 `part.type === "tool"`
-
-用途：
-
-- 展示“正在读取文件”“正在执行命令”“正在搜索代码”等阶段
-- 对高风险工具触发权限审批
-
-## 4. 状态结束
-
-- `session.status`
-- 当 `status.type === "idle"` 时表示该轮执行已结束
-
-用途：
-
-- 输出最终结果
-- 收口 UI 状态
-
-## 5. 错误
-
-- `session.error`
-
-用途：
-
-- 在飞书里展示用户可理解的报错
-- 给后台标记本轮执行失败
-
-## 6. 权限请求
-
-- `permission.asked`
-- `permission.replied`
-
-用途：
-
-- 发送审批卡片
-- 审批完成后继续执行
-
-## 7. 问题回问
-
-- `question.asked`
-- `question.replied`
-- `question.rejected`
-
-用途：
-
-- 发送选择题或补充输入卡片
-- 把用户回答继续送回 OpenCode
-
-## 状态机
-
-建议以单轮用户输入为单位维护任务状态。
+## Task 状态机
 
 ```text
-queued
-  -> running
-  -> waiting_permission
-  -> waiting_question
-  -> waiting_attachment
-  -> completed
-  -> failed
-  -> aborted
+queued -> acked -> running
+running -> waiting_permission -> running
+running -> waiting_question -> running
+running -> waiting_attachment -> running
+running -> completed | failed | aborted
 ```
 
-### queued
+关键说明：
 
-刚收到飞书消息，已完成去重，但还没成功发给 OpenCode。
+- `idle` 不是 task 主状态，而是 runtime checkpoint 事件
+- 同一个 task 可以经历多次 `running <-> waiting_*`
+- 同一个 task 可以经历多次 idle checkpoint
+- `completed | failed | aborted` 一旦写入就不可逆
 
-### acked
+## 会话路由规则
 
-飞书长连接事件已经被快速确认，但后台任务还没开始执行。
+### 1. 一个 OpenCode session 同时最多承载一个开放用户轮次
 
-### running
+OMO 目标模型不允许多个未收口 user turn 共用一个 OpenCode `session_id`。这不是实现洁癖，而是为了避免 reply 归属、idle 终态、wait 队列、result_hash 对账全部打结。
 
-已经成功调用 `prompt_async`，正在等待事件流产出。
+### 2. 新普通 prompt 遇到 live 非等待 task 时，必须 fresh-session rotation
 
-### waiting_permission
+如果当前前台 task 仍在 `queued | acked | running`，而用户又发来新的普通 prompt：
 
-收到了 `permission.asked`，当前执行被阻塞，等待用户审批。
+- 不能继续复用当前 `session_id`
+- 必须 `route.reset(...)` 到 fresh OpenCode session
+- 新 prompt 生成新 task
+- 旧 task 可通过 `superseded_by_task_id` 标记后进入后台继续跑
 
-### waiting_question
+### 3. 文本回复只绑定前台 task 的 head unresolved wait
 
-收到了 `question.asked`，等待用户回答。
+普通文本如果不是新 prompt，就只能回复：
 
-### waiting_attachment
+- 当前前台 task 的 head unresolved wait
 
-收到了图片或文件，但当前轮还缺少文字说明。
+它不能抢答后台 task，也不能跨 task 命中旧的 wait 记录。
 
-此时网关会先缓存附件，并等待用户在同一 thread 中继续发送一条文本消息，再把“文本 + 附件”一起转成 OpenCode `parts`。
+### 4. `/session` 和 `/new` 只切前台，不改写旧 task 的 reply anchor
 
-### completed
+- `/session` 切的是前台 session 指针
+- `/new` 创建的是新的前台 session
+- 已存在 task 的 `reply_anchor_message_id` 不能因切换而改变
 
-收到 `session.status=idle`，且本轮没有未处理错误。
+## 必须成立的最终不变量
 
-### failed
-
-收到 `session.error`，或网关无法处理飞书长连接事件 / OpenCode 事件。
-
-### aborted
-
-用户主动取消，或服务端调用了 `session.abort`。
-
-## 会话路由策略
-
-## 私聊
-
-默认以 `chat_id` 绑定一个活跃 session。
-
-策略：
-
-- 若最近 session 仍活跃，直接复用
-- 若用户输入 `/new`，强制新建 session
-- 若 session 长时间未使用，可自动归档并重建
-
-## 群聊
-
-默认以 thread 粒度隔离。
-
-策略：
-
-- 新 thread 首条消息必须 `@bot`
-- 同一 thread 内如果已建立 session，可直接继续回复
-- 优先使用飞书 thread 或 root message 维持上下文
-- 不同 thread 不共享 session
-
-## 多仓路由
-
-会话必须携带 repo 上下文，建议三种来源：
-
-1. 用户显式命令，例如 `/repo xxx`
-2. 群级默认配置
-3. 用户级默认配置
-4. 进程级全局默认配置
-
-`repo` 上下文可以有两种表达：
-
-- `directory`: 直接指定本地目录路径
-- `workspace`: 指定 OpenCode 的逻辑工作区 ID
-
-推荐理解：
-
-- `directory` 用来回答“操作哪个文件夹”
-- `workspace` 用来回答“操作哪个已登记的工作区”
-- 如果当前部署只是单机单目录开发，通常只需要 `directory`
-- 如果一个聊天需要稳定绑定到某个 worktree、分支环境或远端目标，`workspace` 会更合适
-
-当前实现：
-
-- `/repo <directory>`: 绑定当前 session
-- `/repo --chat <directory>`: 绑定当前聊天默认目录
-- `/repo --me <directory>`: 绑定当前用户默认目录
-- `/repo --workspace <workspace>`: 绑定当前 session 的 workspace
-- `/repo <directory> --workspace <workspace>`: 同时绑定目录和 workspace
-- 新 session 的目录优先级为：当前会话显式绑定 > 聊天默认 > 用户默认 > 全局默认
-
-说明：
-
-- 当前正式实现主要围绕 `directory` 落地
-- `workspace` 仍保留在模型和 OpenCode 接口层，作为后续扩展能力
-- 后续如果需要在 IM 中切换逻辑工作区，可以在同一套优先级上把 `workspace` 一并接入
-
-没有 repo 时，系统应该提示用户先绑定，而不是盲目发到某个目录。
-
-## 长连接运行状态
-
-除了业务任务状态，还需要单独维护飞书连接状态。
-
-建议：
-
-```ts
-type ConnState = {
-  name: "message" | "card"
-  status: "connecting" | "ready" | "reconnecting" | "stopped" | "error"
-  updated_at: number
-  err?: string
-}
-```
-
-用途：
-
-- 监控当前是否还能正常接收消息
-- 发现长连接断开后自动告警或重连
-- 在多实例部署时识别是否存在重复消费者
+- 一次用户轮次只创建一个 task
+- 一个 task 可以拥有多个 `assistant_outbound`
+- 一个 task 最多只有一个 terminal outbound
+- `session.status=idle` 单独出现时不能视为完成
+- 后台 wait 必须延迟显示，直到 replay
+- 背景完成/失败必须仍然回到 originating reply anchor
+- `pending_attachment` 的归属必须是 `task_id`，不是 `session_id`
