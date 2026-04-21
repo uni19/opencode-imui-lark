@@ -1,262 +1,181 @@
-# 02 Architecture
+# 02 架构
+
+## 文档状态
+
+本文定义 OMO 目标架构和迁移约束，不代表仓库已经全部实现。当前代码仍保留单可见出站槽位、session 级 `pending_attachment`、以及等待态 task 克隆等兼容实现；本文件描述的是接下来文档与代码需要收敛到的目标语义。
 
 ## 总览
 
-推荐采用“飞书长连接客户端 + 本地/内网 Gateway Runtime + OpenCode 运行时”的三层结构。
+整体结构继续保持“飞书长连接客户端 + Gateway Runtime + OpenCode Runtime”的三层拆分，但交互模型从“一个 task 对应一个 outbound，`idle` 直接收口”切换到“Task 根记录 + `assistant_outbound` 子账本 + 前台线程可见槽位”。
 
 ```text
 Feishu User
    |
    v
 Feishu Open Platform
-   <-> Feishu Long Connection Client
-        |- Message Event Stream
-        |- Card Action Callback Stream
-        |- Ack Fast Path
-        |
-        v
+   <-> Long Connection Client
+         |- message events
+         |- card actions
+         |- fast ack
+         v
 Gateway Runtime
-   |- Dedup / Idempotency
-   |- Queue / Dispatcher
-   |- Session Router
-   |- Message Renderer
-   |- Card Action Handler
-   |- OpenCode Event Bridge
-   |
-   +-> OpenCode Server
-   |    |- session.create
-   |    |- session.prompt_async
-   |    |- permission.reply
-   |    |- question.reply
-   |    |- question.reject
-   |    |- /event
-   |    |- /global/event
-   |
-   +-> Feishu Send API
+   |- inbound normalize / dedupe
+   |- foreground thread router
+   |- task coordinator
+   |- OMO reconciler
+   |- wait visibility controller
+   |- delivery / patch renderer
+   |- recovery / watchdog / throttling
+   v
+Storage
+   |- im_session
+   |- task
+   |- assistant_outbound   (target)
+   |- outbound_message     (compat mirror)
+   |- pending_attachment   (target: task-owned)
+   |- seen_event / queue_job / conn_state
+   v
+OpenCode Server
+   |- session.create
+   |- session.prompt_async
+   |- permission.reply
+   |- question.reply / reject
+   |- session.status / message.* / session.error
 ```
 
-## 设计原则
+## 核心原则
 
-### 1. 无公网入口优先
+### 1. Task 是用户原始轮次
 
-默认部署前提是机器没有公网 IP 和自有域名，但具备公网出站能力。因此接入设计必须建立在飞书长连接而不是公网 webhook 之上。
+Task 定义为一次 originating user turn，也就是真正的一次用户请求入口。一个 task 从创建到终态都保持同一个身份，不再因为 `permission.asked`、`question.asked`、`waiting_attachment` 被克隆成新的 task。
 
-### 2. 协议翻译和推理执行分离
+### 2. `assistant_outbound` 是助手发言账本
 
-飞书层负责处理长连接、消息卡片、事件去重、快速确认和回调协议。OpenCode 继续只负责会话、上下文、工具、执行和事件。
+每个 task 拥有 1:N 的 `assistant_outbound` 子记录，记录 `ack`、`progress`、`approval`、`question`、`intermediate`、`final`、`error` 等所有助手侧发言。前台只会暴露一个当前可 patch 的可见槽位，但账本必须保留完整历史和幂等信息。
 
-### 3. 以 sessionID 为核心主键
+### 3. `session.status=idle` 只是检查点
 
-飞书里的 chat、thread、message 只是外部交互载体。真正的执行上下文仍然由 OpenCode sessionID 作为权威标识。
+OpenCode 原始 `idle` 只表示 session 当前不忙。它本身不是终态，也不能直接等价为“这一轮 finished”。
 
-### 4. 执行和回推解耦
+任务真正收口要同时满足两件事：
 
-入口请求不等待模型完成，而是调用 `prompt_async` 后快速返回。所有中间状态和结果通过事件桥异步回推给飞书。
+1. reconciliation 找到一个真实的新 final candidate
+2. 当前 task 不存在 unresolved wait
 
-### 5. 长连接快速确认，重逻辑异步化
+只收到 `idle` 而没有新 final，或者还有 wait 未解决，都只能视为非终态检查点。
 
-飞书长连接模式下，收到消息事件或卡片动作后需要尽快完成确认。Gateway 不在长连接回调线程中执行 OpenCode 推理，而是快速落库、入队，再由后台 worker 异步推进。
+### 4. 一个 task 可以发 0..N 条非终态消息，但终态最多一次
 
-### 6. 首版优先可观测和可恢复
+同一个 task 在生命周期内可以反复发：
 
-IM 集成最大的痛点不是“能不能调用成功”，而是“失败后能不能看懂和续上”。因此数据库设计、日志 trace 和幂等处理需要从第一天就有。
+- `ack`
+- `progress`
+- `approval`
+- `question`
+- `intermediate`
 
-## 模块拆分
+但终态只允许一次：
 
-## 1. Feishu Connection Manager
+- `final`
+- `error`
 
-职责：
+一个 task 最多只有一个 terminal closure。后续再来的 terminal 尝试必须被忽略或只记录幂等命中，不能二次收口。
 
-- 使用飞书 SDK 或官方协议与开放平台建立长连接
-- 监听消息事件，例如 `im.message.receive_v1`
-- 对接收事件执行快速确认
-- 处理断线重连、心跳和单实例锁
-- 将飞书原始载荷映射成内部标准事件
+### 5. 同一前台 thread 同时只展示一个可见等待交互
 
-输出给内部层的统一结构建议：
+产品约束不变：
 
-```ts
-type Inbound = {
-  platform: "feishu"
-  kind: "message"
-  delivery: "long_conn"
-  event_id: string
-  tenant: string
-  user: {
-    id: string
-    name?: string
-  }
-  chat: {
-    id: string
-    type: "p2p" | "group"
-    thread?: string
-  }
-  message: {
-    id: string
-    text: string
-    mentions: string[]
-    reply_to?: string
-  } | null
-  action?: {
-    token: string
-    value?: Record<string, unknown>
-  }
-  raw: unknown
-}
-```
+- 同一前台 Feishu thread 同时只展示一个 waiting interaction
+- 后台 wait 保持隐藏，直到用户切回对应 session 再 replay
+- reconnect/watch 的状态提示仍然要节流，不能刷屏
 
-## 2. Queue / Dispatcher
+### 6. 多个未收口用户轮次不能共享一个 OpenCode session
 
-职责：
+如果当前前台 task 仍是 non-terminal，而用户又发来新的普通 prompt，这个 prompt 不能继续复用旧 session。线程必须旋转到 fresh OpenCode session，旧 task 留在旧 session 里后台继续跑。
 
-- 承接长连接层快速确认后的异步任务
-- 做去重、限流、顺序化和任务拆分
-- 将消息事件和卡片事件分别路由到对应 worker
-- 避免在长连接回调线程中执行重操作
+当前代码已经有 `SessionSvc.reset/switch` 这条 seam，目标设计沿用这条 seam 做 fresh-session rotation，而不是让多个开放任务共用一个 session。
 
-## 3. Session Router
+### 7. 所有 Feishu 回帖都绑定不可变 reply anchor
 
-职责：
+每个 task 都有 originating inbound message。所有 `assistant_outbound` 都必须关联这个 immutable reply anchor，这样即使线程已经切到新的前台 session，旧 task 在后台完成时仍然会回到正确的 Feishu 消息链路。
 
-- 把飞书 chat/thread 映射到 OpenCode sessionID
-- 把 tenant/user/chat 映射到默认 repo 或 workspace
-- 管理会话复用、新建和过期策略
+### 8. 兼容窗口保留单可见槽位
 
-建议映射优先级：
+现有实现里：
 
-1. `chat_id + thread_id`
-2. `chat_id + root_message_id`
-3. `chat_id` 的最近活跃会话
+- `task.outbound_id` 保存当前可 patch 的 Feishu 消息 ID
+- `outbound_message(task_id PK)` 保存这个槽位的镜像 payload
 
-## 4. OpenCode Client
+引入 `assistant_outbound` 后，这两处字段暂时继续保留，作为“当前可见 patch 槽位”的 pointer/mirror。它们不是完整历史，也不是目标模型的最终权威账本。
 
-职责：
+### 9. 附件等待改成 task-owned
 
-- 封装 `@opencode-ai/sdk/v2`
-- 统一注入 `baseUrl`、Basic Auth、`directory` 或 `workspace`
-- 提供稳定的领域接口，而不是把 SDK 直接散落到业务里
+当前 `pending_attachment` 仍按 `session_id` 挂靠。目标模型改为 task-owned，这样 attachment-only hold 在 session 旋转、后台继续执行、恢复 replay 时都不会串到别的 task。
 
-建议封装的方法：
+## 模块职责
 
-- `ensureSession`
-- `sendPromptAsync`
-- `abortSession`
-- `listPendingPermissions`
-- `replyPermission`
-- `listPendingQuestions`
-- `replyQuestion`
-- `rejectQuestion`
-- `subscribeEvents`
+### Feishu Connection Manager
 
-`workspace` 说明：
+- 保持长连接
+- 快速 ack
+- 标准化消息事件和卡片动作
+- 不在回调线程里做 OpenCode 推理
 
-- `directory` 是本地目录路径，例如 `/path/to/opencode`
-- `workspace` 是 OpenCode 控制面的逻辑工作区 ID，不等于目录路径
-- 当请求未携带 `workspace` 时，服务端按当前 `directory/project` 直接处理
-- 当请求携带 `workspace` 时，服务端会先解析该工作区，再把请求路由到它对应的目标目录或远端实例
-- 对 IMUI 来说，`workspace` 适合表达“逻辑环境”或“命名好的工作上下文”；`directory` 更适合本机单目录开发
+### Session Router
 
-建议：
+- 维护 `thread -> foreground session` 映射
+- 判定一条入站消息是“回复当前 wait”还是“创建新的用户轮次”
+- 当新 prompt supersede 旧 live task 时，创建 fresh session 并切前台映射
 
-- 首版默认使用 `directory`
-- 只有在 OpenCode 已经启用了多 workspace、worktree、远端实例或分环境路由时，再把 `workspace` 暴露给 IM 命令层
+### Task Coordinator
 
-## 5. OpenCode Event Bridge
+- 为每个 originating user turn 精确创建一个 task
+- 在同一 task 上推进 `running -> waiting_* -> running`
+- 不再为后续 approval/question 克隆 task
+- 持有 task-owned pending attachments
 
-职责：
+### OMO Reconciler
 
-- 常驻订阅 `/event` 或 `/global/event`
-- 过滤属于当前项目目录或 sessionID 的事件
-- 更新本地会话状态
-- 把状态渲染成飞书消息或卡片
+- 消费 OpenCode `message.*`、`permission.*`、`question.*`、`session.status`、`session.error`
+- 追加 `assistant_outbound`
+- 维护 wait 队列
+- 把 `idle` 当 checkpoint，而不是当 `final`
+- 只在发现真实 terminal candidate 时关闭 task
 
-这是整个系统里最关键的增量价值层。
+### Wait Visibility Controller
 
-## 6. Feishu Send / Renderer
+- 同一前台 thread 只暴露一个 waiting interaction
+- 后台 wait 只落账，不立刻发卡
+- 用户切回 session 后 replay 对应 wait
 
-职责：
+### Delivery / Renderer
 
-- 把 OpenCode 事件渲染成飞书文本或卡片
-- 做文本裁剪、摘要、节流和合并更新
-- 区分“占位消息”“执行中消息”“审批卡片”“最终结果消息”
-- 调用飞书发送消息、更新卡片和回复消息 API
+- 用 `assistant_outbound` 作为目标账本
+- 用 `task.outbound_id + outbound_message` 维护当前 patch 槽位兼容
+- 区分 reply、patch、隐藏等待、后台 final 回帖
 
-## 7. Storage
+### Recovery / Watchdog
 
-职责：
+- 保留现有 reconnect/watch throttling
+- 重连后重新做 reconciliation
+- replay 前台 wait，保持后台 wait 隐藏
+- 对 terminal outbound 做幂等保护
 
-- 保存会话映射
-- 保存飞书消息和 OpenCode 消息对应关系
-- 记录幂等 key
-- 记录审批和问答回环状态
-- 保存事件投递游标和失败重试信息
+## 当前实现与目标差距
 
-## 长连接约束
+当前仓库已经有这些可复用基础：
 
-### 企业自建应用
+- `prompt_async + SSE/event`
+- `SessionSvc.reset/switch`
+- `task.outbound_id` 与 `outbound_message`
+- 以 originating inbound 为 reply anchor 的 Feishu reply
+- 后台 session 切换和 wait replay 的第一版
+- reconnect/watchdog 节流
 
-方案默认基于飞书长连接能力，要求使用企业自建应用。
+但还没有完整交付：
 
-### 新版卡片交互
-
-需要统一采用新版卡片交互协议。旧版消息卡片回传不纳入本方案。
-
-### 3 秒确认窗口
-
-长连接收到消息或卡片动作时，不应同步执行 OpenCode 推理或复杂数据库事务。推荐模式是：
-
-1. 解析和校验
-2. 写幂等记录
-3. 投递内部队列
-4. 立即确认
-
-### 单活消费
-
-长连接模式下，同一应用多连接会发生随机分流。因此首版推荐单活消费：
-
-- 一个应用只保留一个活跃连接进程
-- 如果未来做多实例，必须增加 leader 选举或分片机制
-
-## 推荐部署方式
-
-### 方案 A: NAT 单机部署
-
-适合本地开发和最初落地。
-
-- Gateway Runtime 与 OpenCode Server 运行在同一台 NAT 机器
-- 无公网入口
-- 机器主动连接飞书长连接和飞书消息 API
-- OpenCode 仅本机或内网开放
-
-### 方案 B: NAT 网关 + 内网 OpenCode
-
-适合办公室网络或内网机器房。
-
-- Gateway Runtime 部署在有公网出站能力的 NAT 机器上
-- OpenCode Server 部署在同网段或可达内网
-- Gateway 通过 Basic Auth 调 OpenCode
-
-### 方案 C: 集中化 Gateway，分 repo OpenCode
-
-适合后续多仓、多团队扩展。
-
-- 一个集中化 Gateway 维护飞书长连接
-- Gateway 内部维护 repo/workspace 路由表
-- 每个 repo 对应独立 OpenCode 实例或 workspace
-- `/global/event` 可作为跨实例聚合入口
-
-## 为什么不采用公网 webhook
-
-不采用公网 webhook 的原因有三点：
-
-- 当前部署前提没有公网 IP 和域名
-- 长连接已经能覆盖飞书消息接收和新版卡片交互
-- 开发和部署都更轻，不需要额外维护公网入口和证书
-
-## 为什么不直接驱动 TUI
-
-不推荐把飞书 IMUI 构建在 `/tui/*` 控制接口上，原因如下：
-
-- TUI 接口更像 UI 驱动层，不是面向机器人接入的稳定领域接口
-- IM 更需要 `session`, `permission`, `question`, `event` 这些后端协议
-- 异步执行、卡片审批和事件桥更贴近 `prompt_async + SSE` 模型
+- `assistant_outbound` 1:N 账本
+- task-owned `pending_attachment`
+- 同 task 的 wait 队列
+- `idle` checkpoint 和 terminal reconciliation 的正式语义
+- superseding prompt 自动 fresh-session rotation
