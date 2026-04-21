@@ -102,7 +102,8 @@ export function check(root = process.cwd()) {
     const json = JSON.parse(pkg) as { scripts?: Record<string, string> }
     const cmd = names(list(readme, "## 当前支持的 IM 命令"))
     const slash = names(list(rel, "## B. Slash 命令主链"))
-    const done = [4, 5, 6].filter((item) => has(plan, `Task Pack ${item}`)).length
+    const hasLegacyTaskPacks = [4, 5, 6].every((item) => has(plan, `Task Pack ${item}`))
+    const hasOmoPhases = [1, 2, 3, 4, 5, 6].every((item) => has(plan, `## Phase ${item}`))
 
     if (gone.length > 0) out.push(`.env.example 缺少变量：${gone.join(", ")}`)
     if (skip.length > 0) out.push(`.gitignore 缺少忽略项：${skip.join(", ")}`)
@@ -116,7 +117,9 @@ export function check(root = process.cwd()) {
     if (!has(rel, "连续补多次附件")) out.push("发布清单缺少重复附件补充检查项")
     if (!has(rel, "bun run release:doctor")) out.push("发布清单缺少启动前 doctor 命令")
     if (!has(rel, "bun run release:build")) out.push("发布清单缺少安装包构建命令")
-    if (done < 3) out.push("delivery plan 缺少 Task Pack 4-6 执行记录")
+    if (!hasLegacyTaskPacks && !hasOmoPhases) {
+      out.push("delivery plan 缺少 OMO Phase 1-6 迁移计划或 Task Pack 4-6 执行记录")
+    }
     if (!docs.every((item) => existsSync(path.join(root, item)))) out.push("发布文档不完整")
     if (miss(Object.keys(json.scripts ?? {}), ["test", "typecheck", "release:check", "release:doctor", "release:gate", "release:build", "release:smoke", "db:backup", "db:migrate"]).length > 0) {
       out.push("package.json 缺少发布或运维脚本")

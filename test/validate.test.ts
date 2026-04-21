@@ -43,7 +43,7 @@ describe("validate app cfg", () => {
     try {
       await mkdir(path.join(root, "repo"), { recursive: true })
 
-      const out = validateAppCfg(conf(root))
+      const out = validateAppCfg(conf(root), {})
 
       expect(out.ok).toBe(true)
       expect(out.errors).toEqual([])
@@ -66,7 +66,6 @@ describe("validate app cfg", () => {
       bad.runtime!.backup_retention_days = 0
 
       const out = validateAppCfg(bad, {
-        ...process.env,
         OPENCODE_MODEL: "bad-model",
       })
 
