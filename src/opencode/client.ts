@@ -5,7 +5,6 @@ import type {
   OpencodeAgent,
   OpencodeCommand,
   OpencodeMcp,
-  OpencodeModel,
   OpencodeProvider,
   OpencodeResult,
   OpencodeSession,
@@ -184,7 +183,6 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
       workspace: workspace ?? cfg.opencode.workspace,
     })
 
-  const model = (val?: OpencodeModel) => val ?? cfg.opencode.model
 
   return {
     async ensure(input) {
@@ -361,8 +359,8 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
         "POST",
         `/session/${input.session_id}/prompt_async` + base(input.directory, input.workspace),
         {
-          agent: input.agent ?? cfg.opencode.agent,
-          model: model(input.model),
+          ...(input.agent ? { agent: input.agent } : {}),
+          ...(input.model ? { model: input.model } : {}),
           parts,
         },
       )

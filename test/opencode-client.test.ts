@@ -6,7 +6,7 @@ import { createOpencodeSvc } from "../src/opencode/client.ts"
 
 const fetch0 = globalThis.fetch
 
-function cfg() {
+function cfg(input?: Partial<AppCfg["opencode"]>) {
   return {
     log: { level: "info" },
     storage: { path: ":memory:" },
@@ -15,6 +15,7 @@ function cfg() {
       base_url: "http://127.0.0.1:4096",
       username: "opencode",
       directory: "/tmp",
+      ...input,
     },
   } satisfies AppCfg
 }
@@ -294,6 +295,128 @@ describe("opencode client", () => {
         session_id: "ses_1",
       }),
     ).toBe("真正发给用户的回复")
+  })
+
+  test("prompt omits configured default agent and model when caller does not provide them", async () => {
+    const capture: { request?: { url: string; body: Record<string, unknown> | null } } = {}
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        capture.request = {
+          url: String(input),
+          body: init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null,
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        })
+      },
+      {
+        preconnect: fetch0.preconnect.bind(fetch0),
+      },
+    )
+
+    const svc = createOpencodeSvc(
+      cfg({
+        agent: "planner",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+        },
+      }),
+    )
+    await svc.prompt({
+      session_id: "ses_1",
+      text: "hello",
+      directory: "/tmp/alt",
+    })
+
+    const request = capture.request
+    if (!request) throw new Error("expected prompt request")
+    expect(request.url).toContain("/session/ses_1/prompt_async")
+    const body = request.body
+    if (!body) throw new Error("expected prompt request body")
+    expect(body).toEqual({
+      parts: [{ type: "text", text: "hello" }],
+    })
+  })
+
+  test("prompt forwards explicit model override when caller provides it", async () => {
+    const capture: { body?: Record<string, unknown> | null } = {}
+    globalThis.fetch = Object.assign(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        capture.body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        })
+      },
+      {
+        preconnect: fetch0.preconnect.bind(fetch0),
+      },
+    )
+
+    const svc = createOpencodeSvc(
+      cfg({
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+        },
+      }),
+    )
+    await svc.prompt({
+      session_id: "ses_1",
+      text: "hello",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+      },
+    })
+
+    const requestBody = capture.body
+    if (!requestBody) throw new Error("expected prompt request body")
+    expect(requestBody).toEqual({
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+      },
+      parts: [{ type: "text", text: "hello" }],
+    })
+  })
+
+  test("prompt forwards explicit agent override when caller provides it", async () => {
+    const capture: { body?: Record<string, unknown> | null } = {}
+    globalThis.fetch = Object.assign(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        capture.body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        })
+      },
+      {
+        preconnect: fetch0.preconnect.bind(fetch0),
+      },
+    )
+
+    const svc = createOpencodeSvc(cfg({ agent: "planner" }))
+    await svc.prompt({
+      session_id: "ses_1",
+      text: "hello",
+      agent: "researcher",
+    })
+
+    const requestBody = capture.body
+    if (!requestBody) throw new Error("expected prompt request body")
+    expect(requestBody).toEqual({
+      agent: "researcher",
+      parts: [{ type: "text", text: "hello" }],
+    })
   })
 
   test("result exposes visible entries oldest-first with deterministic hash", async () => {

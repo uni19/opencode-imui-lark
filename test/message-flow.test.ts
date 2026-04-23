@@ -162,7 +162,6 @@ describe("message flow", () => {
       opencode: ai.svc,
       directory: conf.opencode.directory,
       workspace: conf.opencode.workspace,
-      model: conf.opencode.model,
     })
 
     await on_msg(
@@ -275,11 +274,9 @@ describe("message flow", () => {
     expect(ai.prompts[0]).toMatchObject({
       session_id: "ses_1",
       directory: "/tmp",
-      model: {
-        providerID: "openai",
-        modelID: "gpt-5.4",
-      },
     })
+    expect(ai.prompts[0]).not.toHaveProperty("model")
+    expect(ai.prompts[0]).not.toHaveProperty("agent")
     expect(ai.prompts[0]?.parts).toHaveLength(3)
     expect(ai.prompts[0]?.parts?.[0]).toMatchObject({
       type: "text",
@@ -302,6 +299,122 @@ describe("message flow", () => {
     expect(history.every((item) => item.state === "emitted")).toBe(true)
   })
 
+  test("repo rebind omits default agent and model without explicit session override", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+    })
+
+    const current = await route.resolve({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+    })
+    const rebound = await route.bind({
+      session_id: current.session_id,
+      directory: "/tmp/alt",
+      workspace_id: "ws_alt",
+    })
+    if (!rebound) throw new Error("missing rebound session")
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_rebind_default", {
+        text: "切到新目录后继续",
+      }),
+    )
+
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]).toMatchObject({
+      session_id: rebound.session_id,
+      directory: "/tmp/alt",
+      workspace: "ws_alt",
+    })
+    expect(ai.prompts[0]).not.toHaveProperty("model")
+    expect(ai.prompts[0]).not.toHaveProperty("agent")
+  })
+
+  test("repo rebind keeps explicit session model override", async () => {
+
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+    })
+
+    const current = await route.resolve({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+    })
+    const updated = await route.model({
+      session_id: current.session_id,
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+      },
+    })
+    if (!updated) throw new Error("missing updated session")
+    const rebound = await route.bind({
+      session_id: updated.session_id,
+      directory: "/tmp/alt",
+      workspace_id: "ws_alt",
+    })
+    if (!rebound) throw new Error("missing rebound session")
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_model_rebind", {
+        text: "切到新目录后继续",
+      }),
+    )
+
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]).toMatchObject({
+      session_id: rebound.session_id,
+      directory: "/tmp/alt",
+      workspace: "ws_alt",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+      },
+    })
+    expect(ai.prompts[0]).not.toHaveProperty("agent")
+  })
+
   test("reuses the same session and task for resumable follow-up", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
@@ -314,7 +427,6 @@ describe("message flow", () => {
       opencode: ai.svc,
       directory: conf.opencode.directory,
       workspace: conf.opencode.workspace,
-      model: conf.opencode.model,
     })
     let statuses: Record<string, OpencodeStatus> = {}
     let last: string | undefined
@@ -420,7 +532,6 @@ describe("message flow", () => {
       opencode: ai.svc,
       directory: conf.opencode.directory,
       workspace: conf.opencode.workspace,
-      model: conf.opencode.model,
     })
     let statuses: Record<string, OpencodeStatus> = {}
     let result: OpencodeResult = { state: "empty" }
@@ -605,7 +716,6 @@ describe("message flow", () => {
       opencode: ai.svc,
       directory: conf.opencode.directory,
       workspace: conf.opencode.workspace,
-      model: conf.opencode.model,
     })
 
     await on_msg(
@@ -677,7 +787,6 @@ describe("message flow", () => {
       opencode: ai.svc,
       directory: conf.opencode.directory,
       workspace: conf.opencode.workspace,
-      model: conf.opencode.model,
     })
 
     await on_msg(
@@ -739,7 +848,6 @@ describe("message flow", () => {
       opencode: ai.svc,
       directory: conf.opencode.directory,
       workspace: conf.opencode.workspace,
-      model: conf.opencode.model,
     })
 
     await on_msg(
@@ -804,7 +912,6 @@ describe("message flow", () => {
       opencode: ai.svc,
       directory: conf.opencode.directory,
       workspace: conf.opencode.workspace,
-      model: conf.opencode.model,
     })
 
     await on_msg(
@@ -916,7 +1023,6 @@ describe("message flow", () => {
       opencode: ai.svc,
       directory: conf.opencode.directory,
       workspace: conf.opencode.workspace,
-      model: conf.opencode.model,
     })
 
     await on_msg(
@@ -974,7 +1080,6 @@ describe("message flow", () => {
       opencode: ai.svc,
       directory: conf.opencode.directory,
       workspace: conf.opencode.workspace,
-      model: conf.opencode.model,
     })
 
     await on_msg(
@@ -1072,7 +1177,6 @@ describe("message flow", () => {
       opencode: ai.svc,
       directory: conf.opencode.directory,
       workspace: conf.opencode.workspace,
-      model: conf.opencode.model,
     })
 
     await on_msg(

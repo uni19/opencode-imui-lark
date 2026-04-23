@@ -3627,8 +3627,7 @@ export async function on_msg(
         parts: parts(val, list),
         directory: item.directory,
         workspace: item.workspace_id,
-        agent: conf.opencode.agent,
-        model: item.model ?? conf.opencode.model,
+        ...(item.model ? { model: item.model } : {}),
       })
       .then(async () => {
         await store.drop_task_pending(prev.id)
@@ -3888,8 +3887,7 @@ export async function on_msg(
       parts: parts(val, list),
       directory: item.directory,
       workspace: item.workspace_id,
-      agent: conf.opencode.agent,
-      model: item.model ?? conf.opencode.model,
+      ...(item.model ? { model: item.model } : {}),
     })
     .catch(async (err) => {
       const val = raw(err)
