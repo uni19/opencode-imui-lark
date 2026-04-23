@@ -1,12 +1,5 @@
 import type { Render, RenderOut } from "../contracts.js"
 
-const text = (body: string): RenderOut => ({
-  kind: "text",
-  body: {
-    text: body,
-  },
-})
-
 const card = (body: Record<string, unknown>): RenderOut => ({
   kind: "card",
   body,
@@ -53,19 +46,19 @@ export function createRender(): Render {
 
     intermediate(input) {
       return card({
-        title: "OpenCode",
+        title: "阶段性更新（后台仍在继续）",
         template: "green",
         state: "intermediate",
-        text: [`阶段性更新（后台仍在继续）`, input.text].join("\n\n"),
+        text: input.text,
       })
     },
 
     final(input) {
       return card({
-        title: "OpenCode",
+        title: "最终完成",
         template: "green",
         state: "final",
-        text: [`最终完成`, input.text].join("\n\n"),
+        text: input.text,
       })
     },
 
