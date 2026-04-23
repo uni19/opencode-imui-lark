@@ -12,7 +12,6 @@ import type {
   OpencodeCommand,
   OpencodeEvent,
   OpencodeMcp,
-  OpencodeModel,
   OpencodeProvider,
   OpencodeResult,
   OpencodeSkill,
@@ -43,14 +42,13 @@ import {
   ameta,
   done_msg,
   explain,
-  friendly,
   model,
   qmeta,
   recover_msg,
   repo,
   signal_msg,
+  status_card,
   short,
-  status_text,
   stuck,
   time,
   type RecoverMode,
@@ -294,11 +292,6 @@ function ready(assets: InboundMessage["assets"]) {
   return assets.filter((item): item is typeof item & { url: string; mime: string; name: string } => !!item.url && !!item.mime && !!item.name)
 }
 
-
-// 只有 permission / question 需要走“前台串行卡片”队列。
-function waiting_status(status: Task["status"]) {
-  return status === "waiting_permission" || status === "waiting_question"
-}
 
 function record(val: unknown) {
   if (!val || typeof val !== "object") return
@@ -862,11 +855,11 @@ async function deliver(
   meta?: PublishMeta,
 ) {
   if (!row) {
-    await feishu.send({
+    const result = await feishu.send({
       chat_id,
       out,
     })
-    return
+    return result.id
   }
   const inbound = await store.get_inbound(row.inbound_id)
   const reply_id = row.reply_anchor_message_id ?? inbound?.message_id
@@ -889,6 +882,7 @@ async function deliver(
   if (meta?.kind !== "intermediate") {
     await sync_visible_slot(store, task, row, result.id, out, true)
   }
+  return result.id
 }
 
 async function patch(
@@ -925,6 +919,20 @@ function text(out: RenderOut) {
   const val = out.body.text
   if (typeof val !== "string") return
   return val
+}
+
+function terminal_status_patch(out: RenderOut): RenderOut {
+  if (out.kind !== "card") return out
+  if (!out.body || typeof out.body !== "object") return out
+  return {
+    kind: "card",
+    body: {
+      ...out.body,
+      title: "最终已完成",
+      state: "final",
+      text: "请查看下方最终答复",
+    },
+  }
 }
 
 async function result(
@@ -1304,7 +1312,7 @@ export async function publish(
   base?: Awaited<ReturnType<Store["get_last_task"]>>,
   meta?: PublishMeta,
 ) {
-  const row = base ?? (await store.get_last_task(session_id))
+  let row = base ?? (await store.get_last_task(session_id))
   const note = text(out)
   if (opts?.dedup && row) {
     const hit = await store.get_outbound(row.id)
@@ -1320,26 +1328,36 @@ export async function publish(
     return row
   }
 
-  if (row.outbound_id && meta?.kind !== "intermediate") {
-    await feishu
-      .patch({
-        msg_id: row.outbound_id,
-        out,
-      })
-      .then(async () => {
-        if (meta) {
-          await emit_outbound(store, row, out, {
-            ...meta,
-            action: "patch",
-            feishu_message_id: row.outbound_id,
-          })
-        }
-        await sync_visible_slot(store, task, row, row.outbound_id!, out)
-      })
-      .catch(async (err) => {
-        console.warn("[publish.patch]", err instanceof Error ? err.message : String(err))
-        await deliver(store, task, feishu, row, chat_id, out, meta)
-      })
+  const current_row: TaskRow = row
+  let history: AssistantOutbound[] | undefined
+  const assistant_history = async () => {
+    history ??= await store.list_assistant_outbounds(current_row.id)
+    return history
+  }
+
+  const first_intermediate =
+    meta?.kind === "intermediate" &&
+    !row.status_outbound_id &&
+    !(await assistant_history()).some((item) => item.kind === "intermediate" && item.state === "emitted")
+  const intermediate_status_target = row.outbound_id
+
+  const final_after_intermediate =
+    !!row.outbound_id &&
+    meta?.kind === "final" &&
+    (await assistant_history()).some((item) => item.kind === "intermediate" && item.state === "emitted")
+
+  if (final_after_intermediate) {
+    await deliver(store, task, feishu, row, chat_id, out, meta)
+    if (typeof row.status_outbound_id === "string") {
+      await feishu
+        .patch({
+          msg_id: row.status_outbound_id,
+          out: terminal_status_patch(out),
+        })
+        .catch((err) => {
+          console.warn("[publish.patch.initial]", err instanceof Error ? err.message : String(err))
+        })
+    }
     if (note) {
       await task.note({
         id: row.id,
@@ -1349,7 +1367,59 @@ export async function publish(
     return row
   }
 
-  await deliver(store, task, feishu, row, chat_id, out, meta)
+  if (row.outbound_id && meta?.kind !== "intermediate" && !final_after_intermediate) {
+    const patch_row = row
+    const patch_target = row.outbound_id
+    try {
+      await feishu.patch({
+        msg_id: patch_target,
+        out,
+      })
+    } catch (err) {
+      console.warn("[publish.patch]", err instanceof Error ? err.message : String(err))
+      const reply_id = await deliver(store, task, feishu, patch_row, chat_id, out, meta)
+      if (reply_id && patch_row.status_outbound_id === patch_target) {
+        await task.link({
+          id: patch_row.id,
+          outbound_id: reply_id,
+          status_outbound_id: reply_id,
+        })
+      }
+      if (note) {
+        await task.note({
+          id: row.id,
+          note,
+        })
+      }
+      return row
+    }
+    if (meta) {
+      await emit_outbound(store, patch_row, out, {
+        ...meta,
+        action: "patch",
+        feishu_message_id: patch_target,
+      })
+    }
+    await sync_visible_slot(store, task, patch_row, patch_target, out)
+    if (note) {
+      await task.note({
+        id: row.id,
+        note,
+      })
+    }
+    return row
+  }
+
+  const reply_id = await deliver(store, task, feishu, row, chat_id, out, meta)
+  if (first_intermediate && reply_id) {
+    const status_target = intermediate_status_target ?? reply_id
+    await task.link({
+      id: row.id,
+      outbound_id: status_target,
+      status_outbound_id: status_target,
+    })
+    row = (await store.get_task(row.id)) ?? row
+  }
   if (note) {
     await task.note({
       id: row.id,
@@ -1843,17 +1913,23 @@ async function finish(
   })
 }
 
-async function handoff_task(
-  task: ReturnType<typeof createTaskSvc>,
-  prev: Task | null | undefined,
-  next: Task,
-  _note: string,
+async function rebind_task(
+  store: Store,
+  task: TaskSvc,
+  prev: Task,
+  item: ImSession,
+  inbound: InboundMessage,
 ) {
-  if (!prev || !active(prev.status)) return
-  await task.supersede({
+  await task.rebind({
     id: prev.id,
-    superseded_by_task_id: next.id,
+    im_session_id: item.id,
+    inbound_id: inbound.id,
+    reply_anchor_message_id: inbound.message_id,
+    directory: item.directory,
+    workspace_id: item.workspace_id,
+    clear_result_hash: true,
   })
+  return (await store.get_task(prev.id)) ?? prev
 }
 
 export async function probe(
@@ -2575,9 +2651,9 @@ export async function on_cmd(
     await feishu.reply({
       msg_id: inbound.message_id,
       out: {
-        kind: "text",
+        kind: "card",
         body: {
-          text: status_text({
+          ...status_card({
             row: last,
             current,
             pref,
@@ -2586,6 +2662,7 @@ export async function on_cmd(
             message,
             opencode: op,
           }),
+          template: "blue",
         },
       },
     })
@@ -3109,32 +3186,16 @@ export async function on_cmd(
         root_message_id: inbound.root_message_id,
         user_id: inbound.user_id,
       }))
-    if (last && active(last.status) && syncd === "resumable") {
-      item = await route.reset({
-        tenant_id: inbound.tenant_id,
-        chat_id: inbound.chat_id,
-        chat_type: inbound.chat_type,
-        thread_id: inbound.thread_id,
-        root_message_id: inbound.root_message_id,
-        user_id: inbound.user_id,
-      })
-    }
-    const row = await task.add({
-      im_session_id: item.id,
-      session_id: item.session_id,
-      inbound_id: inbound.id,
-      reply_anchor_message_id: inbound.message_id,
-      directory: item.directory,
-      workspace_id: item.workspace_id,
-    })
-    if (last && active(last.status) && syncd === "resumable") {
-      await handoff_task(
-        task,
-        last,
-        row,
-        "已转为同会话内新的命令任务，后续回复将对应新的命令消息。",
-      )
-    }
+    const row = last && active(last.status) && syncd === "resumable"
+      ? await rebind_task(store, task, last, item, inbound)
+      : await task.add({
+          im_session_id: item.id,
+          session_id: item.session_id,
+          inbound_id: inbound.id,
+          reply_anchor_message_id: inbound.message_id,
+          directory: item.directory,
+          workspace_id: item.workspace_id,
+        })
     await task.ack(row.id)
     await task.run(row.id)
     const out = render.ack({
@@ -3763,33 +3824,16 @@ export async function on_msg(
   })
   if (!list) return
 
-  if (prev && active(prev.status) && syncd === "resumable") {
-    item = await route.reset({
-      tenant_id: inbound.tenant_id,
-      chat_id: inbound.chat_id,
-      chat_type: inbound.chat_type,
-      thread_id: inbound.thread_id,
-      root_message_id: inbound.root_message_id,
-      user_id: inbound.user_id,
-    })
-  }
-
-  const row = await task.add({
-    im_session_id: item.id,
-    session_id: item.session_id,
-    inbound_id: inbound.id,
-    reply_anchor_message_id: inbound.message_id,
-    directory: item.directory,
-    workspace_id: item.workspace_id,
-  })
-  if (prev && active(prev.status) && syncd === "resumable") {
-    await handoff_task(
-      task as ReturnType<typeof createTaskSvc>,
-      prev,
-      row,
-      "已转为同会话内新的跟进任务，后续回复将对应新的用户消息。",
-    )
-  }
+  const row = prev && active(prev.status) && syncd === "resumable"
+    ? await rebind_task(store, task, prev, item, inbound)
+    : await task.add({
+        im_session_id: item.id,
+        session_id: item.session_id,
+        inbound_id: inbound.id,
+        reply_anchor_message_id: inbound.message_id,
+        directory: item.directory,
+        workspace_id: item.workspace_id,
+      })
   await task.ack(row.id)
   if (!val && list.length > 0) {
     await task.hold(row.id)

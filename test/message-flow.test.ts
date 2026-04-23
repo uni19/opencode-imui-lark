@@ -1,7 +1,7 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from "bun:test"
-import { holdmsg, on_msg } from "../src/app/boot.ts"
-import type { AppCfg, FeishuApi, InboundMessage, OpencodeStatus, OpencodeSvc, RenderOut } from "../src/contracts.ts"
+import { holdmsg, on_msg, probe } from "../src/app/boot.ts"
+import type { AppCfg, FeishuApi, InboundMessage, OpencodeResult, OpencodeStatus, OpencodeSvc, RenderOut } from "../src/contracts.ts"
 import { createSessionSvc } from "../src/gateway/session.ts"
 import { createTaskSvc } from "../src/gateway/task.ts"
 import { createRender } from "../src/render/text.ts"
@@ -46,18 +46,27 @@ function inbound(id: string, input?: Partial<InboundMessage>): InboundMessage {
 
 function feishu() {
   const list: Array<{ kind: "send" | "reply" | "patch"; out: RenderOut }> = []
+  const replies: Array<{ id: string; msg_id: string; out: RenderOut }> = []
+  const patches: Array<{ msg_id: string; out: RenderOut }> = []
+  let replySeq = 0
+  let sendSeq = 0
   return {
     api: {
       async send(input) {
         list.push({ kind: "send", out: input.out })
-        return { id: "out_send" }
+        sendSeq += 1
+        return { id: `out_send_${sendSeq}` }
       },
       async reply(input) {
         list.push({ kind: "reply", out: input.out })
-        return { id: "out_reply" }
+        replySeq += 1
+        const id = `out_reply_${replySeq}`
+        replies.push({ id, msg_id: input.msg_id, out: input.out })
+        return { id }
       },
       async patch(input) {
         list.push({ kind: "patch", out: input.out })
+        patches.push({ msg_id: input.msg_id, out: input.out })
       },
       async fetch(input) {
         return {
@@ -73,6 +82,8 @@ function feishu() {
       },
     } satisfies FeishuApi,
     list,
+    replies,
+    patches,
   }
 }
 
@@ -80,58 +91,59 @@ function opencode() {
   const prompts: Array<Parameters<OpencodeSvc["prompt"]>[0]> = []
   const aborts: Array<Parameters<OpencodeSvc["abort"]>[0]> = []
   let seq = 0
+  const svc: OpencodeSvc = {
+    async ensure() {
+      seq += 1
+      return { id: `ses_${seq}` }
+    },
+    async session(id: string) {
+      return {
+        id,
+        title: `Session ${id}`,
+        directory: "/tmp",
+        created_at: 1,
+        updated_at: 1,
+      }
+    },
+    async sessions() {
+      return []
+    },
+    async status(_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> {
+      return {}
+    },
+    async commands() {
+      return []
+    },
+    async skills() {
+      return []
+    },
+    async agents() {
+      return []
+    },
+    async providers() {
+      return []
+    },
+    async mcps() {
+      return []
+    },
+    async prompt(input) {
+      prompts.push(input)
+    },
+    async abort(input) {
+      aborts.push(input)
+    },
+    async allow() {},
+    async answer() {},
+    async reject() {},
+    async command() {
+      return undefined
+    },
+    async last(_input: { session_id: string; directory?: string; workspace?: string }): Promise<string | undefined> {
+      return undefined
+    },
+  }
   return {
-    svc: {
-      async ensure() {
-        seq += 1
-        return { id: `ses_${seq}` }
-      },
-      async session(id: string) {
-        return {
-          id,
-          title: `Session ${id}`,
-          directory: "/tmp",
-          created_at: 1,
-          updated_at: 1,
-        }
-      },
-      async sessions() {
-        return []
-      },
-      async status(_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> {
-        return {}
-      },
-      async commands() {
-        return []
-      },
-      async skills() {
-        return []
-      },
-      async agents() {
-        return []
-      },
-      async providers() {
-        return []
-      },
-      async mcps() {
-        return []
-      },
-      async prompt(input) {
-        prompts.push(input)
-      },
-      async abort(input) {
-        aborts.push(input)
-      },
-      async allow() {},
-      async answer() {},
-      async reject() {},
-      async command() {
-        return undefined
-      },
-      async last(_input: { session_id: string; directory?: string; workspace?: string }): Promise<string | undefined> {
-        return undefined
-      },
-    } satisfies OpencodeSvc,
+    svc,
     prompts,
     aborts,
   }
@@ -290,7 +302,7 @@ describe("message flow", () => {
     expect(history.every((item) => item.state === "emitted")).toBe(true)
   })
 
-  test("hands off resumable follow-up to a fresh session", async () => {
+  test("reuses the same session and task for resumable follow-up", async () => {
     const store = createMemoryStore()
     const task = createTaskSvc(store)
     const ui = feishu()
@@ -346,20 +358,22 @@ describe("message flow", () => {
       }),
     )
 
-    const resumed = await store.get_task_by_inbound("in_resume_1")
-    const next = await store.get_task_by_inbound("in_resume_2")
-    if (!resumed || !next) throw new Error("missing handoff tasks")
-    expect(resumed).toMatchObject({
+    const rebound = await store.get_task(first.id)
+    const active = await store.get_task_by_inbound("in_resume_2")
+    if (!rebound || !active) throw new Error("missing rebound task")
+    expect(rebound).toMatchObject({
       id: first.id,
       status: "running",
-      superseded_by_task_id: next.id,
+      session_id: "ses_1",
+      inbound_id: "in_resume_2",
+      reply_anchor_message_id: "msg_in_resume_2",
     })
-    expect(resumed.terminal_kind).toBeUndefined()
-    expect(typeof resumed.result_hash).toBe("string")
-    expect(next).toMatchObject({
-      status: "running",
-      session_id: "ses_2",
-    })
+    expect(rebound.superseded_by_task_id).toBeUndefined()
+    expect(rebound.terminal_kind).toBeUndefined()
+    expect(rebound.result_hash).toBeUndefined()
+    expect(active.id).toBe(first.id)
+    expect(active.session_id).toBe("ses_1")
+    expect(await store.list_tasks()).toHaveLength(1)
     expect(
       await store.get_session({
         tenant_id: "tenant",
@@ -367,14 +381,215 @@ describe("message flow", () => {
         thread_id: undefined,
       }),
     ).toMatchObject({
-      session_id: "ses_2",
+      session_id: "ses_1",
     })
     expect(ai.prompts).toHaveLength(2)
-    expect(ai.prompts.map((item) => item.session_id)).toEqual(["ses_1", "ses_2"])
+    expect(ai.prompts.map((item) => item.session_id)).toEqual(["ses_1", "ses_1"])
     expect(ai.aborts).toHaveLength(0)
-    expect(ui.list).toContainEqual({
-      kind: "reply",
+    expect(ui.replies[1]).toMatchObject({
+      id: "out_reply_2",
+      msg_id: "msg_in_resume_1",
       out: render.intermediate({ text: "阶段性答案" }),
+    })
+    const history = await store.list_assistant_outbounds(first.id)
+    expect(history[history.length - 2]).toMatchObject({
+      kind: "intermediate",
+      action: "reply",
+      origin_inbound_id: "in_resume_1",
+      origin_message_id: "msg_in_resume_1",
+      feishu_message_id: "out_reply_2",
+    })
+    expect(history[history.length - 1]).toMatchObject({
+      kind: "ack",
+      action: "reply",
+      origin_inbound_id: "in_resume_2",
+      origin_message_id: "msg_in_resume_2",
+      feishu_message_id: "out_reply_3",
+    })
+  })
+
+  test("intermediate task follow-up keeps original status card as terminal patch target", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+    let statuses: Record<string, OpencodeStatus> = {}
+    let result: OpencodeResult = { state: "empty" }
+    ai.svc.status = async (_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> => statuses
+    ai.svc.result = async (_input: { session_id: string; directory?: string; workspace?: string }): Promise<OpencodeResult> => result
+    ai.svc.last = async (_input: { session_id: string; directory?: string; workspace?: string }): Promise<string | undefined> => result.text
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_chain_1", {
+        text: "先做第一步分析",
+      }),
+    )
+
+    const first = await store.get_task_by_inbound("in_chain_1")
+    if (!first) throw new Error("missing first task")
+    expect(first.outbound_id).toBe("out_reply_1")
+
+    statuses = {
+      ses_1: { type: "idle" },
+    }
+    result = {
+      state: "ok",
+      text: "阶段性答案",
+      completed: false,
+    }
+
+    const probeState = await probe(conf, store, task, ui.api, render, ai.svc, first)
+    expect(probeState).toBe("resumable")
+
+    const checkpointed = await store.get_task(first.id)
+    if (!checkpointed) throw new Error("missing checkpointed task")
+    expect(checkpointed).toMatchObject({
+      id: first.id,
+      outbound_id: "out_reply_1",
+      status_outbound_id: "out_reply_1",
+      result_hash: expect.any(String),
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_chain_2", {
+        text: "继续往下做",
+      }),
+    )
+
+    const rebound = await store.get_task(first.id)
+    if (!rebound) throw new Error("missing rebound task")
+    expect(rebound).toMatchObject({
+      id: first.id,
+      session_id: "ses_1",
+      inbound_id: "in_chain_2",
+      reply_anchor_message_id: "msg_in_chain_2",
+      outbound_id: "out_reply_4",
+      status_outbound_id: "out_reply_1",
+    })
+    expect(await store.list_tasks()).toHaveLength(1)
+
+    result = {
+      state: "ok",
+      text: "最终完成",
+      completed: true,
+    }
+
+    const settled = await probe(conf, store, task, ui.api, render, ai.svc, rebound)
+    expect(settled).toBe("settled")
+
+    const finished = await store.get_task(first.id)
+    if (!finished) throw new Error("missing finished task")
+    expect(finished).toMatchObject({
+      id: first.id,
+      session_id: "ses_1",
+      outbound_id: "out_reply_5",
+      status_outbound_id: "out_reply_1",
+      terminal_kind: "final",
+      terminal_outbound_id: "out_reply_5",
+      status: "completed",
+    })
+
+    expect(ui.replies.map((item) => item.id)).toEqual(["out_reply_1", "out_reply_2", "out_reply_3", "out_reply_4", "out_reply_5"])
+    expect(ui.replies[0]).toMatchObject({
+      id: "out_reply_1",
+      msg_id: "msg_in_chain_1",
+      out: render.ack({ text: "先做第一步分析" }),
+    })
+    expect(ui.replies[1]).toMatchObject({
+      id: "out_reply_2",
+      msg_id: "msg_in_chain_1",
+      out: render.intermediate({ text: "阶段性答案" }),
+    })
+    expect(ui.replies[2]).toMatchObject({
+      id: "out_reply_3",
+      msg_id: "msg_in_chain_1",
+      out: render.intermediate({ text: "阶段性答案" }),
+    })
+    expect(ui.replies[3]).toMatchObject({
+      id: "out_reply_4",
+      msg_id: "msg_in_chain_2",
+      out: render.ack({ text: "继续往下做" }),
+    })
+    expect(ui.replies[4]).toMatchObject({
+      id: "out_reply_5",
+      msg_id: "msg_in_chain_2",
+      out: render.final({ text: "最终完成" }),
+    })
+    expect(ui.patches).toHaveLength(1)
+    expect(ui.patches[0]).toMatchObject({
+      msg_id: "out_reply_1",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
+      },
+    })
+    expect(ui.patches.some((item) => item.msg_id === "out_reply_3")).toBe(false)
+
+    const history = await store.list_assistant_outbounds(first.id)
+    expect(history.map((item) => item.kind)).toEqual(["ack", "intermediate", "intermediate", "ack", "final"])
+    expect(history[0]).toMatchObject({
+      kind: "ack",
+      action: "reply",
+      origin_inbound_id: "in_chain_1",
+      origin_message_id: "msg_in_chain_1",
+      feishu_message_id: "out_reply_1",
+    })
+    expect(history[1]).toMatchObject({
+      kind: "intermediate",
+      action: "reply",
+      origin_inbound_id: "in_chain_1",
+      origin_message_id: "msg_in_chain_1",
+      feishu_message_id: "out_reply_2",
+    })
+    expect(history[2]).toMatchObject({
+      kind: "intermediate",
+      action: "reply",
+      origin_inbound_id: "in_chain_1",
+      origin_message_id: "msg_in_chain_1",
+      feishu_message_id: "out_reply_3",
+    })
+    expect(history[3]).toMatchObject({
+      kind: "ack",
+      action: "reply",
+      origin_inbound_id: "in_chain_2",
+      origin_message_id: "msg_in_chain_2",
+      feishu_message_id: "out_reply_4",
+    })
+    expect(history[4]).toMatchObject({
+      kind: "final",
+      action: "reply",
+      origin_inbound_id: "in_chain_2",
+      origin_message_id: "msg_in_chain_2",
+      terminal: true,
+      feishu_message_id: "out_reply_5",
     })
   })
 

@@ -7,6 +7,16 @@ type Prefs = {
   user: RepoPref | null
 }
 
+type StatusInput = {
+  row?: Task | null
+  current?: { session_id: string; directory?: string; workspace_id?: string; model?: OpencodeModel } | null
+  pref: Prefs
+  conf: AppCfg
+  syncd?: "busy" | "resumable" | "settled" | "unknown"
+  message?: ConnState | null
+  opencode?: ConnState | null
+}
+
 function raw(err: unknown) {
   return err instanceof Error ? err.message : String(err)
 }
@@ -175,15 +185,7 @@ export function signal_msg(item: ConnState) {
   return `${head}已恢复，继续同步执行状态…`
 }
 
-export function status_text(input: {
-  row?: Task | null
-  current?: { session_id: string; directory?: string; workspace_id?: string; model?: OpencodeModel } | null
-  pref: Prefs
-  conf: AppCfg
-  syncd?: "busy" | "resumable" | "settled" | "unknown"
-  message?: ConnState | null
-  opencode?: ConnState | null
-}) {
+function status_lines(input: StatusInput) {
   return [
     `会话状态：${label(summary(input.row))}`,
     `目录：${repo(input.current?.directory, input.current?.workspace_id)}`,
@@ -199,8 +201,19 @@ export function status_text(input: {
     input.syncd === "unknown" && input.row && active(input.row.status) ? "状态探测：暂时无法确认远端状态" : undefined,
     `session: ${input.current?.session_id ?? "未创建"}`,
   ]
-    .filter(Boolean)
-    .join("\n")
+    .filter((item): item is string => !!item)
+}
+
+export function status_text(input: StatusInput) {
+  return status_lines(input).join("\n")
+}
+
+export function status_card(input: StatusInput) {
+  const [title = "OpenCode", ...body] = status_lines(input)
+  return {
+    title,
+    text: body.join("\n"),
+  }
 }
 
 export function friendly(err: unknown): string {
