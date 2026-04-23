@@ -208,12 +208,22 @@ describe("dispatch_event", () => {
       } satisfies OpencodeEvent,
     )
 
-    expect(order[0]).toBe("push")
-    expect(order).toContain(`flush:${ses.session_id}`)
-    expect(order.indexOf(`flush:${ses.session_id}`)).toBeLessThan(order.indexOf("reply"))
-    expect(order.filter((item) => item === "reply")).toHaveLength(2)
+    expect(order).toEqual(["push", `flush:${ses.session_id}`, "reply", `flush:${ses.session_id}`, "reply", "patch"])
     expect((await store.get_task("tsk_1"))?.status).toBe("completed")
-    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "done" }))
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "reply", "patch"])
+    expect(ui.list[ui.list.length - 2]?.out).toEqual(render.final({ text: "done" }))
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
+      },
+    })
   })
 
   test("flushes progress before session error event", async () => {

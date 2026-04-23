@@ -639,16 +639,27 @@ describe("on_event", () => {
       terminal_outbound_id: "out_reply",
     })
     expect(settled?.result_hash).toBe(checkpointed?.result_hash)
-    expect(ui.list).toEqual([
-      {
-        kind: "reply",
-        out: render.intermediate({ text: "done" }),
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "reply", "patch"])
+    expect(ui.list[0]).toEqual({
+      kind: "reply",
+      out: render.intermediate({ text: "done" }),
+    })
+    expect(ui.list[1]).toEqual({
+      kind: "reply",
+      out: render.final({ text: "done" }),
+    })
+    expect(ui.list[2]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
       },
-      {
-        kind: "reply",
-        out: render.final({ text: "done" }),
-      },
-    ])
+    })
 
     const history = await store.list_assistant_outbounds("tsk_3")
     expect(history.filter((item) => item.terminal)).toHaveLength(1)
@@ -656,7 +667,7 @@ describe("on_event", () => {
     await on_event(store, task, ui.api, render, opencode("done"), event)
 
     expect((await store.get_task("tsk_3"))?.status).toBe("completed")
-    expect(ui.list).toHaveLength(2)
+    expect(ui.list).toHaveLength(3)
     expect((await store.list_assistant_outbounds("tsk_3")).filter((item) => item.terminal)).toHaveLength(1)
   })
 
@@ -937,16 +948,27 @@ describe("on_event", () => {
       terminal_outbound_id: "out_reply",
     })
     expect(settled?.result_hash).toBe(checkpointed?.result_hash)
-    expect(ui.list).toEqual([
-      {
-        kind: "reply",
-        out: render.intermediate({ text: "fallback done" }),
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "reply", "patch"])
+    expect(ui.list[0]).toEqual({
+      kind: "reply",
+      out: render.intermediate({ text: "fallback done" }),
+    })
+    expect(ui.list[1]).toEqual({
+      kind: "reply",
+      out: render.final({ text: "fallback done" }),
+    })
+    expect(ui.list[2]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
       },
-      {
-        kind: "reply",
-        out: render.final({ text: "fallback done" }),
-      },
-    ])
+    })
   })
 
   test("publishes session error from inbound fallback when session mapping is gone", async () => {

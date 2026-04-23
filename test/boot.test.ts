@@ -73,6 +73,7 @@ function cfg() {
 
 function feishu(input?: { patch_err?: string }) {
   const list: Array<{ kind: "send" | "reply" | "patch"; out: RenderOut }> = []
+  const patches: Array<{ msg_id: string; out: RenderOut }> = []
   return {
     api: {
       async send(item) {
@@ -85,6 +86,7 @@ function feishu(input?: { patch_err?: string }) {
       },
       async patch(item) {
         list.push({ kind: "patch", out: item.out })
+        patches.push({ msg_id: item.msg_id, out: item.out })
         if (input?.patch_err) throw new Error(input.patch_err)
       },
       async fetch() {
@@ -96,6 +98,7 @@ function feishu(input?: { patch_err?: string }) {
       },
     } satisfies FeishuApi,
     list,
+    patches,
   }
 }
 
@@ -1017,6 +1020,7 @@ describe("boot helpers", () => {
     const checkpointed = await store.get_task("tsk_1")
     expect(checkpointed?.status).toBe("running")
     expect(typeof checkpointed?.result_hash).toBe("string")
+    expect(checkpointed?.status_outbound_id).toBe("out_reply")
     expect(checkpointed?.terminal_kind).toBeUndefined()
     expect(checkpointed?.terminal_outbound_id).toBeUndefined()
     expect(ui.list).toEqual([
@@ -1056,11 +1060,26 @@ describe("boot helpers", () => {
     const settled = await store.get_task("tsk_1")
     expect(settled).toMatchObject({
       status: "completed",
+      status_outbound_id: "out_reply",
       terminal_kind: "final",
       terminal_outbound_id: "out_reply",
     })
     expect(settled?.result_hash).toBe(checkpointed?.result_hash)
-    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "resume done" }))
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "reply", "patch"])
+    expect(ui.list[ui.list.length - 2]?.out).toEqual(render.final({ text: "resume done" }))
+    expect(ui.patches).toHaveLength(1)
+    expect(ui.patches[0]).toMatchObject({
+      msg_id: "out_reply",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
+      },
+    })
   })
 
   test("message reconnect keeps running task alive when remote status is unknown", async () => {
@@ -1381,8 +1400,20 @@ describe("boot helpers", () => {
     })
     expect(settled?.result_hash).toBe(checkpointed?.result_hash)
     expect(ui.list[2]).toEqual({
-      kind: "patch",
+      kind: "reply",
       out: render.final({ text: "done after reconnect" }),
+    })
+    expect(ui.list[3]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
+      },
     })
 
     await recover(
@@ -1407,11 +1438,11 @@ describe("boot helpers", () => {
       payload: expect.objectContaining({
         template: "green",
         state: "final",
-        title: "OpenCode",
-        text: "最终完成\n\ndone after reconnect",
+        title: "最终完成",
+        text: "done after reconnect",
       }),
     })
-    expect(ui.list).toHaveLength(3)
+    expect(ui.list).toHaveLength(4)
   })
 
   test("connection burst only signals reconnecting once for active task", async () => {
@@ -1951,6 +1982,7 @@ describe("publish", () => {
     await store.save_task(
       row({
         outbound_id: "out_old",
+        status_outbound_id: "out_old",
       }),
     )
     await store.save_outbound({
@@ -2226,6 +2258,7 @@ describe("publish", () => {
     await store.save_task(
       row({
         outbound_id: "out_old",
+        status_outbound_id: "out_old",
       }),
     )
     await store.save_assistant_outbound({
@@ -2275,6 +2308,7 @@ describe("publish", () => {
 
     expect(ui.list.map((item) => item.kind)).toEqual(["patch", "reply"])
     expect((await store.get_task("tsk_1"))?.outbound_id).toBe("out_reply")
+    expect((await store.get_task("tsk_1"))?.status_outbound_id).toBe("out_reply")
     expect(await store.get_outbound("tsk_1")).toMatchObject({
       msg_id: "out_reply",
     })
@@ -2303,6 +2337,387 @@ describe("publish", () => {
         template: "green",
         text: "done",
       },
+    })
+  })
+
+  test("does not fall back to reply when post-patch bookkeeping fails", async () => {
+    const scenarios = [
+      {
+        name: "assistant history write",
+        expectedError: "assistant history failed",
+        inject(store: ReturnType<typeof createMemoryStore>) {
+          store.save_assistant_outbound = async (_input) => {
+            throw new Error("assistant history failed")
+          }
+        },
+      },
+      {
+        name: "visible slot mirror write",
+        expectedError: "visible slot mirror failed",
+        inject(store: ReturnType<typeof createMemoryStore>) {
+          store.save_outbound = async (_input) => {
+            throw new Error("visible slot mirror failed")
+          }
+        },
+      },
+    ] as const
+
+    for (const scenario of scenarios) {
+      const store = createMemoryStore()
+      const task = createTaskSvc(store)
+      const ui = feishu()
+      await store.save_inbound(inbound())
+      await store.save_task(
+        row({
+          outbound_id: "out_old",
+          status_outbound_id: "out_old",
+        }),
+      )
+      await store.save_outbound({
+        task_id: "tsk_1",
+        msg_id: "out_old",
+        kind: "card",
+        payload: {
+          title: "OpenCode",
+          template: "blue",
+          step: "步骤 1",
+          text: "处理中…",
+        },
+        created_at: 1,
+        updated_at: 1,
+      })
+      await store.save_assistant_outbound({
+        id: "aso_old",
+        task_id: "tsk_1",
+        session_id: "ses_1",
+        seq: 1,
+        kind: "progress",
+        action: "patch",
+        state: "emitted",
+        origin_inbound_id: "in_1",
+        origin_message_id: "msg_1",
+        terminal: false,
+        feishu_message_id: "out_old",
+        payload: {
+          title: "OpenCode",
+          template: "blue",
+          step: "步骤 1",
+          text: "处理中…",
+        },
+        created_at: 1,
+        updated_at: 1,
+      })
+      scenario.inject(store)
+
+      await expect(
+        publish(
+          store,
+          task,
+          ui.api,
+          "ses_1",
+          "chat",
+          {
+            kind: "card",
+            body: {
+              title: "OpenCode",
+              template: "green",
+              text: "done",
+            },
+          },
+          undefined,
+          undefined,
+          { kind: "final", terminal: true },
+        ),
+        `${scenario.name} should surface without a fallback reply`,
+      ).rejects.toThrow(scenario.expectedError)
+
+      expect(ui.list.map((item) => item.kind), scenario.name).toEqual(["patch"])
+      expect((await store.get_task("tsk_1"))?.outbound_id, scenario.name).toBe("out_old")
+      expect((await store.get_task("tsk_1"))?.status_outbound_id, scenario.name).toBe("out_old")
+      expect((await store.get_outbound("tsk_1"))?.msg_id, scenario.name).toBe("out_old")
+    }
+  })
+
+
+  test("final after emitted intermediate replies with a new card and patches the initial card status", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        outbound_id: "out_old",
+        status_outbound_id: "out_old",
+      }),
+    )
+    await store.save_assistant_outbound({
+      id: "aso_intermediate",
+      task_id: "tsk_1",
+      session_id: "ses_1",
+      seq: 1,
+      kind: "intermediate",
+      action: "reply",
+      state: "emitted",
+      origin_inbound_id: "in_1",
+      origin_message_id: "msg_1",
+      terminal: false,
+      feishu_message_id: "out_old",
+      payload: {
+        title: "OpenCode",
+        template: "blue",
+        state: "intermediate",
+        text: "阶段性完成\n\npartial",
+      },
+      created_at: 1,
+      updated_at: 1,
+    })
+
+    await publish(
+      store,
+      task,
+      ui.api,
+      "ses_1",
+      "chat",
+      {
+        kind: "card",
+        body: {
+          title: "OpenCode",
+          template: "green",
+          text: "done",
+        },
+      },
+      undefined,
+      undefined,
+      { kind: "final", terminal: true },
+    )
+
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "patch"])
+    expect(ui.list[0]).toMatchObject({
+      kind: "reply",
+      out: {
+        kind: "card",
+        body: {
+          title: "OpenCode",
+          template: "green",
+          text: "done",
+        },
+      },
+    })
+    expect(ui.patches).toHaveLength(1)
+    expect(ui.patches[0]).toMatchObject({
+      msg_id: "out_old",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
+      },
+    })
+    expect((await store.get_task("tsk_1"))?.outbound_id).toBe("out_reply")
+    expect((await store.get_task("tsk_1"))?.status_outbound_id).toBe("out_old")
+    expect(await store.get_outbound("tsk_1")).toMatchObject({
+      msg_id: "out_reply",
+    })
+    const history = await store.list_assistant_outbounds("tsk_1")
+    expect(history).toHaveLength(2)
+    expect(history[0]).toMatchObject({
+      id: "aso_intermediate",
+      kind: "intermediate",
+      action: "reply",
+      feishu_message_id: "out_old",
+    })
+    expect(history[1]).toMatchObject({
+      task_id: "tsk_1",
+      session_id: "ses_1",
+      seq: 2,
+      kind: "final",
+      action: "reply",
+      state: "emitted",
+      terminal: true,
+      feishu_message_id: "out_reply",
+    })
+  })
+
+  test("final without prior intermediate still patches the visible slot", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        outbound_id: "out_old",
+      }),
+    )
+    await store.save_assistant_outbound({
+      id: "aso_progress",
+      task_id: "tsk_1",
+      session_id: "ses_1",
+      seq: 1,
+      kind: "progress",
+      action: "patch",
+      state: "emitted",
+      origin_inbound_id: "in_1",
+      origin_message_id: "msg_1",
+      terminal: false,
+      feishu_message_id: "out_old",
+      payload: {
+        title: "OpenCode",
+        template: "blue",
+        text: "处理中…",
+      },
+      created_at: 1,
+      updated_at: 1,
+    })
+
+    await publish(
+      store,
+      task,
+      ui.api,
+      "ses_1",
+      "chat",
+      {
+        kind: "card",
+        body: {
+          title: "OpenCode",
+          template: "green",
+          text: "done",
+        },
+      },
+      undefined,
+      undefined,
+      { kind: "final", terminal: true },
+    )
+
+    expect(ui.list.map((item) => item.kind)).toEqual(["patch"])
+    expect((await store.get_task("tsk_1"))?.outbound_id).toBe("out_old")
+    expect(await store.get_outbound("tsk_1")).toMatchObject({
+      msg_id: "out_old",
+    })
+    const history = await store.list_assistant_outbounds("tsk_1")
+    expect(history).toHaveLength(2)
+    expect(history[1]).toMatchObject({
+      kind: "final",
+      action: "patch",
+      feishu_message_id: "out_old",
+    })
+  })
+
+  test("same-task follow-up final still patches the preserved processing card", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_inbound(
+      inbound({
+        id: "in_prev",
+        event_id: "evt_prev",
+        message_id: "msg_prev",
+      }),
+    )
+    await store.save_inbound(
+      inbound({
+        id: "in_rebind",
+        event_id: "evt_rebind",
+        message_id: "msg_rebind",
+      }),
+    )
+    await store.save_task(
+      row({
+        inbound_id: "in_rebind",
+        reply_anchor_message_id: "msg_rebind",
+        outbound_id: "out_followup_ack",
+        status_outbound_id: "out_processing",
+      }),
+    )
+    await store.save_assistant_outbound({
+      id: "aso_prev_intermediate",
+      task_id: "tsk_1",
+      session_id: "ses_1",
+      seq: 1,
+      kind: "intermediate",
+      action: "reply",
+      state: "emitted",
+      origin_inbound_id: "in_prev",
+      origin_message_id: "msg_prev",
+      terminal: false,
+      feishu_message_id: "out_intermediate_prev",
+      payload: {
+        title: "OpenCode",
+        template: "blue",
+        state: "intermediate",
+        text: "阶段性完成\n\npartial",
+      },
+      created_at: 1,
+      updated_at: 1,
+    })
+    await store.save_assistant_outbound({
+      id: "aso_followup_ack",
+      task_id: "tsk_1",
+      session_id: "ses_1",
+      seq: 2,
+      kind: "ack",
+      action: "reply",
+      state: "emitted",
+      origin_inbound_id: "in_rebind",
+      origin_message_id: "msg_rebind",
+      terminal: false,
+      feishu_message_id: "out_followup_ack",
+      payload: {
+        title: "OpenCode",
+        template: "wathet",
+        text: "已收到：继续往下做",
+      },
+      created_at: 2,
+      updated_at: 2,
+    })
+
+    await publish(
+      store,
+      task,
+      ui.api,
+      "ses_1",
+      "chat",
+      {
+        kind: "card",
+        body: {
+          title: "OpenCode",
+          template: "green",
+          text: "done",
+        },
+      },
+      undefined,
+      undefined,
+      { kind: "final", terminal: true },
+    )
+
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "patch"])
+    expect(ui.patches).toHaveLength(1)
+    expect(ui.patches[0]).toMatchObject({
+      msg_id: "out_processing",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
+      },
+    })
+    expect(ui.patches.some((item) => item.msg_id === "out_followup_ack")).toBe(false)
+    expect((await store.get_task("tsk_1"))?.outbound_id).toBe("out_reply")
+    expect((await store.get_task("tsk_1"))?.status_outbound_id).toBe("out_processing")
+    const history = await store.list_assistant_outbounds("tsk_1")
+    expect(history).toHaveLength(3)
+    expect(history[2]).toMatchObject({
+      kind: "final",
+      action: "reply",
+      origin_inbound_id: "in_rebind",
+      origin_message_id: "msg_rebind",
+      terminal: true,
+      feishu_message_id: "out_reply",
     })
   })
 })
@@ -2451,6 +2866,105 @@ describe("commands", () => {
     })
   })
 
+  test("slash command reuses the same task for resumable follow-up", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const oc = {
+      ...opencode(),
+      async commands() {
+        return [
+          {
+            name: "init",
+            description: "init repo",
+            hints: [],
+          },
+        ]
+      },
+      async command(input: { session_id: string; command: string; arguments: string; directory?: string; workspace?: string }) {
+        expect(input).toMatchObject({
+          session_id: "ses_1",
+          command: "init",
+          arguments: "--quick",
+          directory: "/tmp",
+        })
+        return "已执行 /init。"
+      },
+    } satisfies OpencodeSvc
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        result_hash: "hash_old",
+        note: "阶段性答案",
+      }),
+    )
+
+    const ok = await on_cmd(
+      "/init --quick",
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      {
+        ...oc,
+        async status() {
+          return {
+            ses_1: { type: "idle" },
+          }
+        },
+        async last() {
+          return "阶段性答案"
+        },
+      },
+      inbound({
+        id: "in_cmd_resume",
+        event_id: "evt_cmd_resume",
+        message_id: "msg_cmd_resume",
+        text: "/init --quick",
+      }),
+    )
+
+    expect(ok).toBeTrue()
+    const rebound = await store.get_task("tsk_1")
+    expect(rebound).toMatchObject({
+      id: "tsk_1",
+      session_id: "ses_1",
+      inbound_id: "in_cmd_resume",
+      reply_anchor_message_id: "msg_cmd_resume",
+      status: "completed",
+      terminal_kind: "final",
+    })
+    expect(rebound?.superseded_by_task_id).toBeUndefined()
+    expect(rebound?.result_hash).toBeUndefined()
+    expect(await store.list_tasks()).toHaveLength(1)
+    const current = await store.get_session({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      thread_id: undefined,
+    })
+    expect(current?.session_id).toBe("ses_1")
+    const history = await store.list_assistant_outbounds("tsk_1")
+    expect(history.filter((item) => item.kind === "ack")).toHaveLength(1)
+    expect(history.filter((item) => item.kind === "final")).toHaveLength(1)
+    expect(history[history.length - 2]).toMatchObject({
+      kind: "ack",
+      action: "reply",
+      origin_inbound_id: "in_cmd_resume",
+      origin_message_id: "msg_cmd_resume",
+    })
+    expect(history[history.length - 1]).toMatchObject({
+      kind: "final",
+      action: "reply",
+      origin_inbound_id: "in_cmd_resume",
+      origin_message_id: "msg_cmd_resume",
+    })
+    expect(ui.list[ui.list.length - 2]?.kind).toBe("reply")
+    expect(ui.list[ui.list.length - 1]?.kind).toBe("reply")
+  })
+
   test("/repo shows session over chat and user defaults", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
@@ -2557,8 +3071,15 @@ describe("commands", () => {
     const ok = await on_cmd("/status", cfg(), route(), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/status" }))
 
     expect(ok).toBeTrue()
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        title: "会话状态：idle",
+        template: "blue",
+      },
+    })
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
-    expect(text).toContain("会话状态：idle")
+    expect(text).not.toContain("会话状态：idle")
     expect(text).toContain("目录：/tmp (workspace=ws_session)")
     expect(text).toContain("当前模型：anthropic/claude-sonnet-4")
     expect(text).toContain("聊天默认：/tmp/chat (workspace=ws_chat)")
