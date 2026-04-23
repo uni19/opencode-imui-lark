@@ -30,6 +30,20 @@ export function createTaskSvc(store: Store): TaskSvc {
       return task
     },
 
+    async rebind(input) {
+      await patch(input.id, (task) => ({
+        ...task,
+        im_session_id: input.im_session_id ?? task.im_session_id,
+        inbound_id: input.inbound_id,
+        reply_anchor_message_id: input.reply_anchor_message_id,
+        directory: input.directory,
+        workspace_id: input.workspace_id,
+        result_hash: input.clear_result_hash ? undefined : task.result_hash,
+        superseded_by_task_id: undefined,
+        updated_at: now(),
+      }))
+    },
+
     async ack(id) {
       await patch(id, (task) => ({
         ...task,
@@ -135,6 +149,7 @@ export function createTaskSvc(store: Store): TaskSvc {
       await patch(input.id, (task) => ({
         ...task,
         outbound_id: input.outbound_id,
+        status_outbound_id: input.status_outbound_id ?? task.status_outbound_id,
         updated_at: now(),
       }))
     },

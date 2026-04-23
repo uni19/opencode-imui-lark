@@ -78,6 +78,7 @@ export type Task = {
   directory?: string
   workspace_id?: string
   outbound_id?: string
+  status_outbound_id?: string
   note?: string
   status:
     | "queued"
@@ -379,6 +380,15 @@ export type TaskSvc = {
     directory?: string
     workspace_id?: string
   }): Promise<Task>
+  rebind(input: {
+    id: string
+    im_session_id?: string
+    inbound_id: string
+    reply_anchor_message_id?: string
+    directory?: string
+    workspace_id?: string
+    clear_result_hash?: boolean
+  }): Promise<void>
   ack(id: string): Promise<void>
   run(id: string): Promise<void>
   wait(input: { id: string; req_type: "permission" | "question"; req: string }): Promise<void>
@@ -397,7 +407,7 @@ export type TaskSvc = {
   done(id: string, note?: string): Promise<void>
   fail(input: { id: string; err: string; note?: string }): Promise<void>
   abort(id: string, note?: string): Promise<void>
-  link(input: { id: string; outbound_id: string }): Promise<void>
+  link(input: { id: string; outbound_id: string; status_outbound_id?: string }): Promise<void>
   note(input: { id: string; note: string }): Promise<void>
 }
 

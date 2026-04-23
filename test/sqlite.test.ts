@@ -90,6 +90,7 @@ describe("sqlite store", () => {
       req_id: "req_1",
       note: "note",
       outbound_id: "out_1",
+      status_outbound_id: "out_status_1",
     })
     const out = {
       task_id: row.id,
