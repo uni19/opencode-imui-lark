@@ -416,11 +416,11 @@ export type OpencodeSvc = {
   session(id: string): Promise<OpencodeSession | null>
   sessions(input: { directory?: string; limit?: number; roots?: boolean }): Promise<OpencodeSession[]>
   status(input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>>
-  commands(): Promise<OpencodeCommand[]>
-  skills(): Promise<OpencodeSkill[]>
-  agents(): Promise<OpencodeAgent[]>
-  providers(): Promise<OpencodeProvider[]>
-  mcps(): Promise<OpencodeMcp[]>
+  commands(input?: { directory?: string; workspace?: string }): Promise<OpencodeCommand[]>
+  skills(input?: { directory?: string; workspace?: string }): Promise<OpencodeSkill[]>
+  agents(input?: { directory?: string; workspace?: string }): Promise<OpencodeAgent[]>
+  providers(input?: { directory?: string; workspace?: string }): Promise<OpencodeProvider[]>
+  mcps(input?: { directory?: string; workspace?: string }): Promise<OpencodeMcp[]>
   prompt(input: {
     session_id: string
     text?: string

@@ -43,6 +43,27 @@ function mock_fetch(data: unknown) {
   )
 }
 
+function mock_metadata_fetch() {
+  const urls: string[] = []
+  globalThis.fetch = Object.assign(
+    async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      urls.push(url.toString())
+      const body = url.pathname === "/provider" || url.pathname === "/mcp" ? {} : []
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      })
+    },
+    {
+      preconnect: fetch0.preconnect.bind(fetch0),
+    },
+  )
+  return urls
+}
+
 describe("opencode client", () => {
   test("last picks the newest assistant message with text output", async () => {
     mock_fetch([
@@ -417,6 +438,77 @@ describe("opencode client", () => {
       agent: "researcher",
       parts: [{ type: "text", text: "hello" }],
     })
+  })
+
+  test("metadata endpoints use configured default scope", async () => {
+    const urls = mock_metadata_fetch()
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "ws_default",
+      }),
+    )
+
+    await svc.commands()
+    await svc.skills()
+    await svc.agents()
+    await svc.providers()
+    await svc.mcps()
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+        }
+      }),
+    ).toEqual([
+      { path: "/command", directory: "/tmp/default-scope", workspace: "ws_default" },
+      { path: "/skill", directory: "/tmp/default-scope", workspace: "ws_default" },
+      { path: "/agent", directory: "/tmp/default-scope", workspace: "ws_default" },
+      { path: "/provider", directory: "/tmp/default-scope", workspace: "ws_default" },
+      { path: "/mcp", directory: "/tmp/default-scope", workspace: "ws_default" },
+    ])
+  })
+
+  test("metadata endpoints allow explicit scope override", async () => {
+    const urls = mock_metadata_fetch()
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "ws_default",
+      }),
+    )
+
+    const input = {
+      directory: "/tmp/override-scope",
+      workspace: "ws_override",
+    }
+
+    await svc.commands(input)
+    await svc.skills(input)
+    await svc.agents(input)
+    await svc.providers(input)
+    await svc.mcps(input)
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+        }
+      }),
+    ).toEqual([
+      { path: "/command", directory: "/tmp/override-scope", workspace: "ws_override" },
+      { path: "/skill", directory: "/tmp/override-scope", workspace: "ws_override" },
+      { path: "/agent", directory: "/tmp/override-scope", workspace: "ws_override" },
+      { path: "/provider", directory: "/tmp/override-scope", workspace: "ws_override" },
+      { path: "/mcp", directory: "/tmp/override-scope", workspace: "ws_override" },
+    ])
   })
 
   test("result exposes visible entries oldest-first with deterministic hash", async () => {

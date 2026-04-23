@@ -247,8 +247,8 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
       )
     },
 
-    async commands() {
-      const data = await req(cfg, "GET", "/command")
+    async commands(input: { directory?: string; workspace?: string } = {}) {
+      const data = await req(cfg, "GET", "/command" + base(input.directory, input.workspace))
       if (!Array.isArray(data)) return []
       return data
         .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
@@ -264,8 +264,8 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
         .filter((item) => !!item.name)
     },
 
-    async skills() {
-      const data = await req(cfg, "GET", "/skill")
+    async skills(input: { directory?: string; workspace?: string } = {}) {
+      const data = await req(cfg, "GET", "/skill" + base(input.directory, input.workspace))
       if (!Array.isArray(data)) return []
       return data
         .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
@@ -277,8 +277,8 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
         .filter((item) => !!item.name)
     },
 
-    async agents() {
-      const data = await req(cfg, "GET", "/agent")
+    async agents(input: { directory?: string; workspace?: string } = {}) {
+      const data = await req(cfg, "GET", "/agent" + base(input.directory, input.workspace))
       if (!Array.isArray(data)) return []
       return data
         .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
@@ -298,8 +298,8 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
         .filter((item) => !!item.name && !item.hidden)
     },
 
-    async providers() {
-      const data = await req(cfg, "GET", "/provider")
+    async providers(input: { directory?: string; workspace?: string } = {}) {
+      const data = await req(cfg, "GET", "/provider" + base(input.directory, input.workspace))
       if (!data || typeof data !== "object") return []
       const root = data as Record<string, unknown>
       const all = Array.isArray(root.all) ? root.all : []
@@ -329,8 +329,8 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
       return active.length > 0 ? active : list
     },
 
-    async mcps() {
-      const data = await req(cfg, "GET", "/mcp")
+    async mcps(input: { directory?: string; workspace?: string } = {}) {
+      const data = await req(cfg, "GET", "/mcp" + base(input.directory, input.workspace))
       if (!data || typeof data !== "object") return []
       return Object.entries(data)
         .filter(([, item]) => !!item && typeof item === "object")

@@ -2872,7 +2872,11 @@ describe("commands", () => {
     const ui = feishu()
     const oc = {
       ...opencode(),
-      async commands() {
+      async commands(input?: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp",
+          workspace: "ws_cmd",
+        })
         return [
           {
             name: "init",
@@ -2887,11 +2891,12 @@ describe("commands", () => {
           command: "init",
           arguments: "--quick",
           directory: "/tmp",
+          workspace: "ws_cmd",
         })
         return "已执行 /init。"
       },
     } satisfies OpencodeSvc
-    await store.save_session(session())
+    await store.save_session(session({ workspace_id: "ws_cmd" }))
     await store.save_inbound(inbound())
     await store.save_task(
       row({
@@ -3341,14 +3346,79 @@ describe("commands", () => {
     })
   })
 
+  test("metadata listing commands query the current scope", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ directory: "/tmp/scoped", workspace_id: "ws_scoped" }))
+
+    const calls: Array<{ name: string; input?: { directory?: string; workspace?: string } }> = []
+    const oc = {
+      ...opencode(),
+      async skills(input?: { directory?: string; workspace?: string }) {
+        calls.push({ name: "skills", input })
+        return []
+      },
+      async agents(input?: { directory?: string; workspace?: string }) {
+        calls.push({ name: "agents", input })
+        return []
+      },
+      async providers(input?: { directory?: string; workspace?: string }) {
+        calls.push({ name: "providers", input })
+        return []
+      },
+      async mcps(input?: { directory?: string; workspace?: string }) {
+        calls.push({ name: "mcps", input })
+        return []
+      },
+      async commands(input?: { directory?: string; workspace?: string }) {
+        calls.push({ name: "commands", input })
+        return []
+      },
+    } satisfies OpencodeSvc
+
+    for (const [i, text] of ["/skills", "/agents", "/models", "/mcps", "/commands"].entries()) {
+      const ok = await on_cmd(
+        text,
+        cfg(),
+        route(),
+        svc,
+        store,
+        ui.api,
+        createRender(),
+        oc,
+        inbound({
+          id: `in_scope_${i}`,
+          event_id: `evt_scope_${i}`,
+          message_id: `msg_scope_${i}`,
+          text,
+        }),
+      )
+
+      expect(ok).toBeTrue()
+    }
+
+    expect(calls).toEqual([
+      { name: "skills", input: { directory: "/tmp/scoped", workspace: "ws_scoped" } },
+      { name: "agents", input: { directory: "/tmp/scoped", workspace: "ws_scoped" } },
+      { name: "providers", input: { directory: "/tmp/scoped", workspace: "ws_scoped" } },
+      { name: "mcps", input: { directory: "/tmp/scoped", workspace: "ws_scoped" } },
+      { name: "commands", input: { directory: "/tmp/scoped", workspace: "ws_scoped" } },
+    ])
+  })
+
   test("/model provider/model switches current model", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session())
+    await store.save_session(session({ workspace_id: "ws_model" }))
     const oc = {
       ...opencode(),
-      async providers() {
+      async providers(input?: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp",
+          workspace: "ws_model",
+        })
         return [
           {
             id: "openai",

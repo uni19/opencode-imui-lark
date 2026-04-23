@@ -2762,7 +2762,7 @@ export async function on_cmd(
   }
 
   if (cmd.name === "skills") {
-    const list = await opencode.skills()
+    const list = await opencode.skills(base)
     await feishu.reply({
       msg_id: inbound.message_id,
       out: {
@@ -2776,7 +2776,7 @@ export async function on_cmd(
   }
 
   if (cmd.name === "agents") {
-    const list = await opencode.agents()
+    const list = await opencode.agents(base)
     await feishu.reply({
       msg_id: inbound.message_id,
       out: {
@@ -2790,7 +2790,7 @@ export async function on_cmd(
   }
 
   if (cmd.name === "models") {
-    const list = await opencode.providers()
+    const list = await opencode.providers(base)
     await feishu.reply({
       msg_id: inbound.message_id,
       out: {
@@ -2875,7 +2875,7 @@ export async function on_cmd(
       return true
     }
 
-    const list = await opencode.providers()
+    const list = await opencode.providers(base)
     const hit = list.find((item) => item.id === pid)
     if (!hit || !hit.models.some((item) => item.id === mid)) {
       await feishu.reply({
@@ -2908,7 +2908,7 @@ export async function on_cmd(
   }
 
   if (cmd.name === "mcps") {
-    const list = await opencode.mcps()
+    const list = await opencode.mcps(base)
     await feishu.reply({
       msg_id: inbound.message_id,
       out: {
@@ -2922,7 +2922,7 @@ export async function on_cmd(
   }
 
   if (cmd.name === "commands") {
-    const list = await opencode.commands()
+    const list = await opencode.commands(base)
     await feishu.reply({
       msg_id: inbound.message_id,
       out: {
@@ -3142,7 +3142,7 @@ export async function on_cmd(
   }
 
   if (cmd.name === "slash") {
-    const list = await opencode.commands()
+    const list = await opencode.commands(base)
     const hit = list.find((item) => item.name === cmd.command)
     if (!hit) {
       const near = similar(list, cmd.command)
