@@ -252,10 +252,23 @@ describe("probe", () => {
       terminal_outbound_id: "out_reply",
     })
     expect(settled?.result_hash).toBe(checkpointed?.result_hash)
-    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "reply", "patch"])
+    expect(ui.list[ui.list.length - 2]?.out).toMatchObject({
       ...render.final({
         text: "final answer",
       }),
+    })
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
+      },
     })
   })
 
@@ -474,10 +487,23 @@ describe("probe", () => {
       terminal_outbound_id: "out_reply",
     })
     expect(settled?.result_hash).toBe(secondRow?.result_hash)
-    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "reply", "reply", "patch"])
+    expect(ui.list[ui.list.length - 2]?.out).toMatchObject({
       ...render.final({
         text: "second answer",
       }),
+    })
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
+      },
     })
 
     const history = await store.list_assistant_outbounds("tsk_hash_reset")

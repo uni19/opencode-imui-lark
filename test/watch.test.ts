@@ -303,7 +303,20 @@ describe("sweep", () => {
       terminal_outbound_id: "out_reply",
     })
     expect(settled?.result_hash).toBe(checkpointed?.result_hash)
-    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "watch done" }))
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "reply", "patch"])
+    expect(ui.list[ui.list.length - 2]?.out).toEqual(render.final({ text: "watch done" }))
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
+      },
+    })
   })
 
   test("re-patches stale waiting permission when remote is still busy", async () => {
@@ -640,7 +653,20 @@ describe("sweep", () => {
       terminal_outbound_id: "out_reply",
     })
     expect(settled?.result_hash).toBe(second?.result_hash)
-    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "watch done twice" }))
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "reply", "reply", "patch"])
+    expect(ui.list[ui.list.length - 2]?.out).toEqual(render.final({ text: "watch done twice" }))
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
+      },
+    })
 
     const history = await store.list_assistant_outbounds("tsk_chain_done")
     expect(history.filter((item) => item.terminal && item.state === "emitted")).toHaveLength(1)
@@ -731,11 +757,24 @@ describe("sweep", () => {
       payload: expect.objectContaining({
         template: "green",
         state: "final",
-        title: "OpenCode",
-        text: "最终完成\n\nfinal after boot",
+        title: "最终完成",
+        text: "final after boot",
       }),
     })
-    expect(ui.list[ui.list.length - 1]?.out).toEqual(render.final({ text: "final after boot" }))
+    expect(ui.list.map((item) => item.kind)).toEqual(["reply", "reply", "patch"])
+    expect(ui.list[ui.list.length - 2]?.out).toEqual(render.final({ text: "final after boot" }))
+    expect(ui.list[ui.list.length - 1]).toMatchObject({
+      kind: "patch",
+      out: {
+        kind: "card",
+        body: {
+          title: "最终已完成",
+          template: "green",
+          state: "final",
+          text: "请查看下方最终答复",
+        },
+      },
+    })
   })
 
   test("keeps stale running task alive when remote status probe fails", async () => {
