@@ -397,7 +397,7 @@ export function renderInstallScript(version: string) {
     'fi',
     'CONFIG_BASE="${XDG_CONFIG_HOME:-$HOME/.config}"',
     'CONFIG_DIR="${CONFIG_DIR:-$CONFIG_BASE/$APP}"',
-    'exec "$LIB_DIR/$APP" --env-file "$CONFIG_DIR/.env" "$@"',
+    'IMUI_ENV_FILE="${IMUI_ENV_FILE:-$CONFIG_DIR/.env}" exec "$LIB_DIR/$APP" "$@"',
     "EOF",
     'chmod +x "$BIN_DIR/$APP"',
     "cat > \"$BIN_DIR/$APP-service\" <<'EOF'",
