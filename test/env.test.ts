@@ -23,9 +23,67 @@ describe("app env", () => {
     })
   })
 
-  test("reads --env-file from argv", () => {
+  test("reads --env-file from argv and prefers the last one", () => {
     expect(envFileArg(["node", "app", "--env-file", "/tmp/demo.env"])).toBe("/tmp/demo.env")
     expect(envFileArg(["node", "app", "--env-file=/tmp/demo.env"])).toBe("/tmp/demo.env")
+    expect(
+      envFileArg(["node", "app", "--env-file", "/tmp/default.env", "--env-file=/tmp/override.env"]),
+    ).toBe("/tmp/override.env")
+  })
+
+  test("explicit argv env file overrides preloaded values and IMUI_ENV_FILE", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "oc-feishu-env-"))
+    const first = path.join(root, "first.env")
+    const second = path.join(root, "second.env")
+
+    try {
+      await writeFile(first, "LOG_LEVEL=warn\nIMUI_DB_PATH=first.db\n")
+      await writeFile(second, "LOG_LEVEL=trace\nIMUI_DB_PATH=second.db\n")
+      const env: NodeJS.ProcessEnv = {
+        IMUI_ENV_FILE: first,
+        LOG_LEVEL: "debug",
+        IMUI_DB_PATH: "local.db",
+      }
+
+      const out = await loadAppEnv({
+        cwd: root,
+        env,
+        argv: ["node", "app", "--env-file", first, "--env-file", second],
+      })
+
+      expect(out.source).toBe("explicit")
+      expect(out.file).toBe(second)
+      expect(out.config_dir).toBe(root)
+      expect(env.LOG_LEVEL).toBe("trace")
+      expect(env.IMUI_DB_PATH).toBe("second.db")
+      expect(env.IMUI_ENV_FILE).toBe(first)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("IMUI_ENV_FILE overrides preloaded values", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "oc-feishu-env-"))
+    const explicit = path.join(root, "explicit.env")
+
+    try {
+      await writeFile(explicit, "LOG_LEVEL=error\nIMUI_DB_PATH=explicit.db\n")
+      const env: NodeJS.ProcessEnv = {
+        IMUI_ENV_FILE: explicit,
+        LOG_LEVEL: "debug",
+        IMUI_DB_PATH: "local.db",
+      }
+
+      const out = await loadAppEnv({ cwd: root, env, argv: ["node", "app"] })
+
+      expect(out.source).toBe("explicit")
+      expect(out.file).toBe(explicit)
+      expect(out.config_dir).toBe(root)
+      expect(env.LOG_LEVEL).toBe("error")
+      expect(env.IMUI_DB_PATH).toBe("explicit.db")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   test("prefers cwd .env over config home fallback", async () => {

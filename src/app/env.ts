@@ -77,12 +77,18 @@ export function parseEnv(text: string) {
 
 export function envFileArg(argv = process.argv) {
   const args = argv.slice(2)
+  let val: string | undefined
   for (let i = 0; i < args.length; i++) {
     const item = args[i]
     if (!item) continue
-    if (item === "--env-file") return args[i + 1]
-    if (item.startsWith("--env-file=")) return item.slice("--env-file=".length)
+    if (item === "--env-file") {
+      val = args[i + 1]
+      i += 1
+      continue
+    }
+    if (item.startsWith("--env-file=")) val = item.slice("--env-file=".length)
   }
+  return val
 }
 
 export async function loadAppEnv(input: LoadEnvInput = {}): Promise<EnvLoadResult> {
@@ -112,8 +118,9 @@ export async function loadAppEnv(input: LoadEnvInput = {}): Promise<EnvLoadResul
 
   if (file) {
     const loaded = parseEnv(await readFile(file, "utf8"))
+    const overwrite = source === "explicit"
     for (const [key, val] of Object.entries(loaded)) {
-      if (env[key] === undefined) env[key] = val
+      if (overwrite || env[key] === undefined) env[key] = val
     }
     if (!env.IMUI_CONFIG_DIR) env.IMUI_CONFIG_DIR = path.dirname(file)
   }
