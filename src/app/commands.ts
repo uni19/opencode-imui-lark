@@ -7,11 +7,11 @@ export const LOCAL_COMMANDS = [
   { name: "/repo", description: "查看或绑定目录 / workspace" },
   { name: "/sessions", description: "查看当前目录下最近会话" },
   { name: "/model", description: "查看或切换当前模型" },
-  { name: "/skills", description: "查看当前可用技能" },
-  { name: "/commands", description: "查看当前可转发 slash 命令" },
-  { name: "/agents", description: "查看当前可用 agent" },
-  { name: "/models", description: "查看当前已连接 provider / model" },
-  { name: "/mcps", description: "查看当前 MCP 状态" },
+  { name: "/skills", description: "查看当前目录 / workspace 下可用技能" },
+  { name: "/commands", description: "查看当前目录 / workspace 下可转发 slash 命令" },
+  { name: "/agents", description: "查看当前目录 / workspace 下可用 agent" },
+  { name: "/models", description: "查看当前目录 / workspace 下已连接 provider / model" },
+  { name: "/mcps", description: "查看当前目录 / workspace 下 MCP 状态" },
 ] as const
 
 export const LOCAL_COMMAND_NAMES = LOCAL_COMMANDS.map((item) => item.name)

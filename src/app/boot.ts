@@ -151,7 +151,8 @@ function help() {
     "/repo --chat 为当前聊天设置默认目录",
     "/repo --me 为当前用户设置默认目录",
     "--chat / --me 可与 --workspace 组合使用",
-    "未命中的 slash 会尝试透传到 OpenCode 执行，例如 /init",
+    "/skills、/agents、/models、/mcps、/commands 会按当前目录 / workspace 取数",
+    "未命中的 slash 会按当前目录 / workspace 尝试透传到 OpenCode 执行，例如 /init",
     "示例：/repo /path/to/opencode",
     "示例：/repo --chat /path/to/opencode",
     "示例：/repo --workspace ws_local",
@@ -1177,17 +1178,17 @@ function sessions(
 }
 
 function skills(list: OpencodeSkill[]) {
-  if (list.length === 0) return "当前没有可用技能。"
+  if (list.length === 0) return "当前目录 / workspace 下没有可用技能。"
   return [
-    `技能列表（共 ${list.length} 项）：`,
+    `当前目录 / workspace 下技能列表（共 ${list.length} 项）：`,
     ...list.map((item, i) => `${i + 1}. ${item.name}${item.description ? ` - ${item.description}` : ""}`),
   ].join("\n")
 }
 
 function agents(list: OpencodeAgent[]) {
-  if (list.length === 0) return "当前没有可用 agent。"
+  if (list.length === 0) return "当前目录 / workspace 下没有可用 agent。"
   return [
-    `Agent 列表（共 ${list.length} 项）：`,
+    `当前目录 / workspace 下 Agent 列表（共 ${list.length} 项）：`,
     ...list.map((item, i) =>
       `${i + 1}. ${item.name} [${item.mode}]${item.model ? ` ${item.model.provider_id}/${item.model.model_id}` : ""}${item.description ? ` - ${item.description}` : ""}`,
     ),
@@ -1195,7 +1196,7 @@ function agents(list: OpencodeAgent[]) {
 }
 
 function models(list: OpencodeProvider[]) {
-  if (list.length === 0) return "当前没有已连接 provider。"
+  if (list.length === 0) return "当前目录 / workspace 下没有已连接 provider。"
 
   const label = (item: OpencodeProvider["models"][number]) => {
     if (item.name === item.id) return item.id
@@ -1213,7 +1214,7 @@ function models(list: OpencodeProvider[]) {
   }
 
   return [
-    `当前已连接 provider / model（共 ${list.length} 项）：`,
+    `当前目录 / workspace 下已连接 provider / model（共 ${list.length} 项）：`,
     ...list.map((item, i) =>
       [
         `${i + 1}. ${item.name}${item.connected ? " [connected]" : ""}`,
@@ -1228,9 +1229,9 @@ function models(list: OpencodeProvider[]) {
 }
 
 function mcps(list: OpencodeMcp[]) {
-  if (list.length === 0) return "当前没有 MCP 配置。"
+  if (list.length === 0) return "当前目录 / workspace 下没有 MCP 配置。"
   return [
-    `MCP 状态（共 ${list.length} 项）：`,
+    `当前目录 / workspace 下 MCP 状态（共 ${list.length} 项）：`,
     ...list.map((item, i) =>
       `${i + 1}. ${item.name} [${item.status}]${item.error ? ` ${short(item.error)}` : ""}`,
     ),
@@ -1242,7 +1243,9 @@ function commands(list: OpencodeCommand[]) {
     "IM 原生命令：",
     ...local().map((item) => `- ${item.name} ${item.description}`),
     "",
-    list.length === 0 ? "OpenCode 可转发命令：\n- 暂无" : "OpenCode 可转发命令：",
+    list.length === 0
+      ? "当前目录 / workspace 下 OpenCode 可转发命令：\n- 暂无"
+      : "当前目录 / workspace 下 OpenCode 可转发命令：",
     ...list.map((item) =>
       `- /${item.name}${item.source ? ` [${item.source}]` : ""}${item.description ? ` ${item.description}` : ""}`,
     ),

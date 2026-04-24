@@ -242,11 +242,11 @@ OPENCODE_DIRECTORY=/absolute/path/to/your/worktree
 - `/model`: 查看当前模型和默认模型
 - `/model <provider>/<model_id>`: 为当前会话切换模型
 - `/model reset`: 恢复当前会话到默认模型
-- `/skills`: 查看当前可用技能
-- `/agents`: 查看当前可用 agent
-- `/models`: 查看当前已连接 provider / model，返回模型名称和 model id
-- `/mcps`: 查看当前 MCP 状态
-- `/commands`: 查看当前可转发 slash 命令
+- `/skills`: 查看当前目录 / workspace 下可用技能
+- `/agents`: 查看当前目录 / workspace 下可用 agent
+- `/models`: 查看当前目录 / workspace 下已连接 provider / model，返回模型名称和 model id
+- `/mcps`: 查看当前目录 / workspace 下 MCP 状态
+- `/commands`: 查看当前目录 / workspace 下可转发 slash 命令
 - `/repo --workspace <workspace>`: 为当前会话绑定 workspace
 - `/repo <directory> --workspace <workspace>`: 同时绑定目录和 workspace
 - `--chat` / `--me` 可与 `--workspace` 组合使用，例如 `/repo --chat /repo/path --workspace ws_local`
