@@ -11,10 +11,12 @@ import type {
   OpencodeSkill,
   OpencodeStatus,
   OpencodeSvc,
+  OpencodeWorkspace,
   PromptPart,
 } from "../contracts.js"
 
 type Json = Record<string, unknown>
+type ScopeInput = { directory?: string; workspace?: string }
 
 type Message = {
   info?: {
@@ -39,14 +41,77 @@ function dir(val?: string) {
   return path.resolve(val)
 }
 
-function qs(input: { directory?: string; workspace?: string }) {
+function has<K extends string>(input: object, key: K): input is Record<K, unknown> {
+  return Object.prototype.hasOwnProperty.call(input, key)
+}
+
+function qs(input: ScopeInput) {
   const url = new URLSearchParams()
   const directory = dir(input.directory)
   if (directory) url.set("directory", directory)
-  if (input.workspace) url.set("workspace", input.workspace)
+  if (has(input, "workspace") && typeof input.workspace === "string") {
+    url.set("workspace", input.workspace)
+  }
   const val = url.toString()
   if (!val) return ""
   return "?" + val
+}
+
+function scoped(input: ScopeInput = {}) {
+  return qs(input)
+}
+
+function seeded(cfg: AppCfg, input: ScopeInput = {}) {
+  return qs({
+    directory: input.directory ?? cfg.opencode.directory,
+    workspace: has(input, "workspace") ? input.workspace : cfg.opencode.workspace,
+  })
+}
+
+function session(item: Record<string, unknown>): OpencodeSession {
+  return {
+    id: String(item.id ?? ""),
+    title: String(item.title ?? item.id ?? ""),
+    directory: String(item.directory ?? ""),
+    workspace_id: typeof item.workspaceID === "string" ? item.workspaceID : undefined,
+    parent_id: typeof item.parentID === "string" ? item.parentID : undefined,
+    created_at:
+      item.time && typeof item.time === "object" && "created" in item.time ? Number(item.time.created ?? 0) : 0,
+    updated_at:
+      item.time && typeof item.time === "object" && "updated" in item.time ? Number(item.time.updated ?? 0) : 0,
+  } satisfies OpencodeSession
+}
+
+function workspace(item: Record<string, unknown>): OpencodeWorkspace {
+  const branch = typeof item.branch === "string"
+    ? item.branch
+    : typeof item.gitBranch === "string"
+      ? item.gitBranch
+      : undefined
+  const name = typeof item.name === "string"
+    ? item.name
+    : typeof item.label === "string"
+      ? item.label
+      : undefined
+  const type = typeof item.type === "string"
+    ? item.type
+    : typeof item.kind === "string"
+      ? item.kind
+      : undefined
+  const current = typeof item.current === "boolean"
+    ? item.current
+    : typeof item.selected === "boolean"
+      ? item.selected
+      : typeof item.active === "boolean"
+        ? item.active
+        : undefined
+  return {
+    id: String(item.id ?? item.workspaceID ?? ""),
+    name,
+    type,
+    branch,
+    current,
+  } satisfies OpencodeWorkspace
 }
 
 function text(parts: unknown) {
@@ -177,17 +242,10 @@ function inspect(data: unknown): OpencodeResult {
 }
 
 export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
-  const base = (directory?: string, workspace?: string) =>
-    qs({
-      directory: directory ?? cfg.opencode.directory,
-      workspace: workspace ?? cfg.opencode.workspace,
-    })
-
-
   return {
     async ensure(input) {
       if (input.session_id) return { id: input.session_id }
-      const data = await req(cfg, "POST", "/session" + base(input.directory, input.workspace), {})
+      const data = await req(cfg, "POST", "/session" + seeded(cfg, input), {})
       const id = (data as { id?: string }).id
       if (!id) throw new Error("opencode session.create returned no id")
       return { id }
@@ -196,26 +254,18 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
     async session(id) {
       const data = await req(cfg, "GET", `/session/${id}`)
       if (!data || typeof data !== "object") return null
-      const item = data as Record<string, unknown>
-      const session = {
-        id: String(item.id ?? ""),
-        title: String(item.title ?? item.id ?? ""),
-        directory: String(item.directory ?? ""),
-        workspace_id: typeof item.workspaceID === "string" ? item.workspaceID : undefined,
-        parent_id: typeof item.parentID === "string" ? item.parentID : undefined,
-        created_at:
-          item.time && typeof item.time === "object" && "created" in item.time ? Number(item.time.created ?? 0) : 0,
-        updated_at:
-          item.time && typeof item.time === "object" && "updated" in item.time ? Number(item.time.updated ?? 0) : 0,
-      } satisfies OpencodeSession
-      if (!session.id) return null
-      return session
+      const item = session(data as Record<string, unknown>)
+      if (!item.id) return null
+      return item
     },
 
     async sessions(input) {
       const query = new URLSearchParams()
       const directory = dir(input.directory ?? cfg.opencode.directory)
       if (directory) query.set("directory", directory)
+      if (has(input, "workspace") && typeof input.workspace === "string") {
+        query.set("workspace", input.workspace)
+      }
       if (input.limit) query.set("limit", String(input.limit))
       if (input.roots) query.set("roots", "true")
       const suffix = query.toString() ? "?" + query.toString() : ""
@@ -223,22 +273,21 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
       if (!Array.isArray(data)) return []
       return data
         .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
-        .map((item) => ({
-          id: String(item.id ?? ""),
-          title: String(item.title ?? item.id ?? ""),
-          directory: String(item.directory ?? ""),
-          workspace_id: typeof item.workspaceID === "string" ? item.workspaceID : undefined,
-          parent_id: typeof item.parentID === "string" ? item.parentID : undefined,
-          created_at:
-            item.time && typeof item.time === "object" && "created" in item.time ? Number(item.time.created ?? 0) : 0,
-          updated_at:
-            item.time && typeof item.time === "object" && "updated" in item.time ? Number(item.time.updated ?? 0) : 0,
-        }))
+        .map(session)
+        .filter((item) => !!item.id)
+    },
+
+    async workspaces(input = {}) {
+      const data = await req(cfg, "GET", "/experimental/workspace" + scoped({ directory: input.directory ?? cfg.opencode.directory }))
+      if (!Array.isArray(data)) return []
+      return data
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+        .map(workspace)
         .filter((item) => !!item.id)
     },
 
     async status(input) {
-      const data = await req(cfg, "GET", "/session/status" + base(input.directory, input.workspace))
+      const data = await req(cfg, "GET", "/session/status" + scoped(input))
       if (!data || typeof data !== "object") return {}
       return Object.fromEntries(
         Object.entries(data)
@@ -248,7 +297,7 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
     },
 
     async commands(input: { directory?: string; workspace?: string } = {}) {
-      const data = await req(cfg, "GET", "/command" + base(input.directory, input.workspace))
+      const data = await req(cfg, "GET", "/command" + seeded(cfg, input))
       if (!Array.isArray(data)) return []
       return data
         .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
@@ -265,7 +314,7 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
     },
 
     async skills(input: { directory?: string; workspace?: string } = {}) {
-      const data = await req(cfg, "GET", "/skill" + base(input.directory, input.workspace))
+      const data = await req(cfg, "GET", "/skill" + seeded(cfg, input))
       if (!Array.isArray(data)) return []
       return data
         .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
@@ -278,7 +327,7 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
     },
 
     async agents(input: { directory?: string; workspace?: string } = {}) {
-      const data = await req(cfg, "GET", "/agent" + base(input.directory, input.workspace))
+      const data = await req(cfg, "GET", "/agent" + seeded(cfg, input))
       if (!Array.isArray(data)) return []
       return data
         .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
@@ -299,7 +348,7 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
     },
 
     async providers(input: { directory?: string; workspace?: string } = {}) {
-      const data = await req(cfg, "GET", "/provider" + base(input.directory, input.workspace))
+      const data = await req(cfg, "GET", "/provider" + seeded(cfg, input))
       if (!data || typeof data !== "object") return []
       const root = data as Record<string, unknown>
       const all = Array.isArray(root.all) ? root.all : []
@@ -330,7 +379,7 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
     },
 
     async mcps(input: { directory?: string; workspace?: string } = {}) {
-      const data = await req(cfg, "GET", "/mcp" + base(input.directory, input.workspace))
+      const data = await req(cfg, "GET", "/mcp" + seeded(cfg, input))
       if (!data || typeof data !== "object") return []
       return Object.entries(data)
         .filter(([, item]) => !!item && typeof item === "object")
@@ -357,7 +406,7 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
       await req(
         cfg,
         "POST",
-        `/session/${input.session_id}/prompt_async` + base(input.directory, input.workspace),
+        `/session/${input.session_id}/prompt_async` + scoped(input),
         {
           ...(input.agent ? { agent: input.agent } : {}),
           ...(input.model ? { model: input.model } : {}),
@@ -367,28 +416,28 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
     },
 
     async abort(input) {
-      await req(cfg, "POST", `/session/${input.session_id}/abort` + base(input.directory, input.workspace), {})
+      await req(cfg, "POST", `/session/${input.session_id}/abort` + scoped(input), {})
     },
 
     async allow(input) {
-      await req(cfg, "POST", `/permission/${input.req}/reply` + base(input.directory, input.workspace), {
+      await req(cfg, "POST", `/permission/${input.req}/reply` + scoped(input), {
         reply: input.reply,
         ...(input.message ? { message: input.message } : {}),
       })
     },
 
     async answer(input) {
-      await req(cfg, "POST", `/question/${input.req}/reply` + base(input.directory, input.workspace), {
+      await req(cfg, "POST", `/question/${input.req}/reply` + scoped(input), {
         answers: input.answers,
       })
     },
 
     async reject(input) {
-      await req(cfg, "POST", `/question/${input.req}/reject` + base(input.directory, input.workspace), {})
+      await req(cfg, "POST", `/question/${input.req}/reject` + scoped(input), {})
     },
 
     async command(input) {
-      const data = await req(cfg, "POST", `/session/${input.session_id}/command` + base(input.directory, input.workspace), {
+      const data = await req(cfg, "POST", `/session/${input.session_id}/command` + scoped(input), {
         command: input.command,
         arguments: input.arguments,
       })
@@ -399,7 +448,7 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
       const data = await req(
         cfg,
         "GET",
-        `/session/${input.session_id}/message` + base(input.directory, input.workspace),
+        `/session/${input.session_id}/message` + scoped(input),
       )
       return inspect(data).text
     },
@@ -408,7 +457,7 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
       const data = await req(
         cfg,
         "GET",
-        `/session/${input.session_id}/message` + base(input.directory, input.workspace),
+        `/session/${input.session_id}/message` + scoped(input),
       )
       return inspect(data)
     },

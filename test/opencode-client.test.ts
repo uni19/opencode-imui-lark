@@ -64,6 +64,26 @@ function mock_metadata_fetch() {
   return urls
 }
 
+function capture_fetch(body: unknown = {}) {
+  const urls: string[] = []
+  globalThis.fetch = Object.assign(
+    async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      urls.push(url.toString())
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      })
+    },
+    {
+      preconnect: fetch0.preconnect.bind(fetch0),
+    },
+  )
+  return urls
+}
+
 describe("opencode client", () => {
   test("last picks the newest assistant message with text output", async () => {
     mock_fetch([
@@ -509,6 +529,158 @@ describe("opencode client", () => {
       { path: "/provider", directory: "/tmp/override-scope", workspace: "ws_override" },
       { path: "/mcp", directory: "/tmp/override-scope", workspace: "ws_override" },
     ])
+  })
+
+  test("runtime endpoints omit workspace query when caller explicitly passes undefined", async () => {
+    const urls = capture_fetch([])
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "ws_default",
+      }),
+    )
+
+    await svc.status({
+      directory: "/tmp/runtime-scope",
+      workspace: undefined,
+    })
+    await svc.last({
+      session_id: "ses_1",
+      directory: "/tmp/runtime-scope",
+      workspace: undefined,
+    })
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+        }
+      }),
+    ).toEqual([
+      { path: "/session/status", directory: "/tmp/runtime-scope", workspace: null },
+      { path: "/session/ses_1/message", directory: "/tmp/runtime-scope", workspace: null },
+    ])
+  })
+
+  test("sessions forwards explicit workspace query and preserves unscoped omission", async () => {
+    const urls = capture_fetch([])
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "ws_default",
+      }),
+    )
+
+    await svc.sessions({
+      directory: "/tmp/scoped",
+      workspace: "ws_local",
+      roots: true,
+      limit: 8,
+    })
+    await svc.sessions({
+      directory: "/tmp/unscoped",
+      workspace: undefined,
+      limit: 2,
+    })
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+          roots: url.searchParams.get("roots"),
+          limit: url.searchParams.get("limit"),
+        }
+      }),
+    ).toEqual([
+      {
+        path: "/session",
+        directory: "/tmp/scoped",
+        workspace: "ws_local",
+        roots: "true",
+        limit: "8",
+      },
+      {
+        path: "/session",
+        directory: "/tmp/unscoped",
+        workspace: null,
+        roots: null,
+        limit: "2",
+      },
+    ])
+  })
+
+  test("workspaces uses experimental endpoint and normalizes fields", async () => {
+    const urls: string[] = []
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL) => {
+        const url = new URL(String(input))
+        urls.push(url.toString())
+        return new Response(JSON.stringify([
+          {
+            id: "ws_local",
+            name: "Local",
+            type: "git",
+            branch: "main",
+            current: true,
+          },
+          {
+            workspaceID: "ws_feature",
+            label: "Feature",
+            kind: "git",
+            gitBranch: "feat/demo",
+            selected: false,
+          },
+        ]), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        })
+      },
+      {
+        preconnect: fetch0.preconnect.bind(fetch0),
+      },
+    )
+
+    const svc = createOpencodeSvc(cfg())
+
+    expect(
+      await svc.workspaces({
+        directory: "/tmp/repo",
+      }),
+    ).toEqual([
+      {
+        id: "ws_local",
+        name: "Local",
+        type: "git",
+        branch: "main",
+        current: true,
+      },
+      {
+        id: "ws_feature",
+        name: "Feature",
+        type: "git",
+        branch: "feat/demo",
+        current: false,
+      },
+    ])
+
+    const url = new URL(urls[0] ?? "")
+    expect({
+      path: url.pathname,
+      directory: url.searchParams.get("directory"),
+      workspace: url.searchParams.get("workspace"),
+    }).toEqual({
+      path: "/experimental/workspace",
+      directory: "/tmp/repo",
+      workspace: null,
+    })
   })
 
   test("result exposes visible entries oldest-first with deterministic hash", async () => {
