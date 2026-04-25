@@ -5,6 +5,7 @@ type Cmd =
   | { name: "new" }
   | { name: "session"; arg?: string }
   | { name: "sessions" }
+  | { name: "workspaces" }
   | { name: "skills" }
   | { name: "commands" }
   | { name: "agents" }
@@ -51,6 +52,7 @@ export function parseCmd(text: string): Cmd | null {
   if (head === "/new") return { name: "new" }
   if (head === "/session") return { name: "session", arg: tail[0] }
   if (head === "/sessions") return { name: "sessions" }
+  if (head === "/workspaces") return { name: "workspaces" }
   if (head === "/skills") return { name: "skills" }
   if (head === "/commands") return { name: "commands" }
   if (head === "/agents") return { name: "agents" }

@@ -37,12 +37,15 @@ describe("parseCmd", () => {
     })
   })
 
-  test("parses new and sessions commands", () => {
+  test("parses new, sessions, and workspaces commands", () => {
     expect(parseCmd("/new")).toEqual({
       name: "new",
     })
     expect(parseCmd("/sessions")).toEqual({
       name: "sessions",
+    })
+    expect(parseCmd("/workspaces")).toEqual({
+      name: "workspaces",
     })
   })
 
