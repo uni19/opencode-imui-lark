@@ -151,13 +151,15 @@ function help() {
     "/repo --chat 为当前聊天设置默认目录",
     "/repo --me 为当前用户设置默认目录",
     "--chat / --me 可与 --workspace 组合使用",
-    "/skills、/agents、/models、/mcps、/commands 会按当前目录 / workspace 取数",
+    "/sessions、/skills、/agents、/models、/mcps、/commands 会按当前目录 / workspace 取数",
+    "/workspaces 会列出当前仓库目录下可用 workspace",
     "未命中的 slash 会按当前目录 / workspace 尝试透传到 OpenCode 执行，例如 /init",
     "示例：/repo /path/to/opencode",
     "示例：/repo --chat /path/to/opencode",
     "示例：/repo --workspace ws_local",
     "示例：/repo /path/to/opencode --workspace ws_local",
     "示例：/sessions",
+    "示例：/workspaces",
     "示例：/session ses_xxx",
     "示例：/agents",
     "示例：/models",
@@ -627,9 +629,11 @@ function site(
   row?: Pick<Task, "directory" | "workspace_id"> | null,
   session?: Pick<ImSession, "directory" | "workspace_id"> | null,
 ) {
+  const directory = row?.directory ?? session?.directory ?? conf.opencode.directory
+  const workspace = row ? row.workspace_id : session ? session.workspace_id : conf.opencode.workspace
   return {
-    directory: row?.directory ?? session?.directory ?? conf.opencode.directory,
-    workspace: row?.workspace_id ?? session?.workspace_id ?? conf.opencode.workspace,
+    directory,
+    workspace,
   }
 }
 
@@ -669,7 +673,7 @@ async function dest(store: Store, row: Task | null | undefined, session_id: stri
     return {
       chat_id: hit.chat_id,
       directory: row?.directory ?? hit.directory,
-      workspace: row?.workspace_id ?? hit.workspace_id,
+      workspace: row ? row.workspace_id : hit.workspace_id,
     }
   }
   if (!row) return
@@ -998,11 +1002,13 @@ async function classify_idle(
     }).catch(() => null),
     opencode.sessions({
       directory: to.directory,
+      workspace: to.workspace,
       limit: 200,
     }).catch(() => null),
   ])
   if (!status || !list) return "resumable" as const
-  const busy = descendants(list, row.session_id).some((id) => remote_busy(status[id]))
+  const scoped = exact_session_scope(list, to)
+  const busy = descendants(scoped, row.session_id).some((id) => remote_busy(status[id]))
   if (busy) return "resumable" as const
   if (val.completed !== true) return "resumable" as const
   if (val.state === "empty") return "empty" as const
@@ -1143,14 +1149,29 @@ function state(val?: OpencodeStatus) {
   return val.type
 }
 
+function exact_workspace(current?: string, target?: string) {
+  return current === target
+}
+
+function exact_session_scope(
+  list: Awaited<ReturnType<OpencodeSvc["sessions"]>>,
+  input: { directory?: string; workspace?: string },
+) {
+  return list.filter(
+    (item) => (!input.directory || item.directory === input.directory) && exact_workspace(item.workspace_id, input.workspace),
+  )
+}
+
 function scope(
   current: Awaited<ReturnType<Store["get_session"]>>,
   pref: Awaited<ReturnType<typeof prefs>>,
   conf: AppCfg,
 ) {
+  const directory = current?.directory ?? pref.chat?.directory ?? pref.user?.directory ?? conf.opencode.directory
+  const workspace = current ? current.workspace_id : pref.chat ? pref.chat.workspace_id : pref.user ? pref.user.workspace_id : conf.opencode.workspace
   return {
-    directory: current?.directory ?? pref.chat?.directory ?? pref.user?.directory ?? conf.opencode.directory,
-    workspace: current?.workspace_id ?? pref.chat?.workspace_id ?? pref.user?.workspace_id ?? conf.opencode.workspace,
+    directory,
+    workspace,
   }
 }
 
@@ -1159,9 +1180,10 @@ function sessions(
   status: Record<string, OpencodeStatus>,
   local: Record<string, Task["status"] | undefined>,
   dir?: string,
+  workspace?: string,
   current?: string,
 ) {
-  if (list.length === 0) return `当前目录 ${repo(dir)} 下暂无会话。`
+  if (list.length === 0) return `当前目录 / workspace ${repo(dir, workspace)} 下暂无会话。`
   return [
     `最近会话（共 ${list.length} 条）：`,
     ...list.map((item, i) =>
@@ -1174,6 +1196,25 @@ function sessions(
     ),
     "",
     "使用 /session <session_id> 切换当前会话。",
+  ].join("\n\n")
+}
+
+function workspaces(
+  list: Awaited<ReturnType<ReturnType<typeof createOpencodeSvc>["workspaces"]>>,
+  dir?: string,
+  current?: string,
+) {
+  if (list.length === 0) return `当前目录 ${repo(dir)} 下没有可用 workspace。`
+  return [
+    `当前目录 ${repo(dir)} 下的 workspace（共 ${list.length} 项）：`,
+    ...list.map((item, i) =>
+      [
+        `${i + 1}. ${item.current || item.id === current ? "[当前] " : ""}${item.name && item.name !== item.id ? `${item.name} (${item.id})` : item.id}`,
+        `type: ${item.type ?? "-"}`,
+        `branch: ${item.branch ?? "-"}`,
+        `hint: /repo --workspace ${item.id}`,
+      ].join("\n"),
+    ),
   ].join("\n\n")
 }
 
@@ -2739,15 +2780,17 @@ export async function on_cmd(
   }
 
   if (cmd.name === "sessions") {
-    const [list, status, tasks] = await Promise.all([
+    const [raw, status, tasks] = await Promise.all([
       opencode.sessions({
         directory: base.directory,
+        workspace: base.workspace,
         roots: true,
         limit: 8,
       }),
       opencode.status(base),
       store.list_tasks(),
     ])
+    const list = exact_session_scope(raw, base)
     const local = [...latest(tasks).values()].reduce((map, row) => {
       map[row.session_id] = row.status
       return map
@@ -2757,7 +2800,7 @@ export async function on_cmd(
       out: {
         kind: "text",
         body: {
-          text: sessions(list, status, local, base.directory, current?.session_id),
+          text: sessions(list, status, local, base.directory, base.workspace, current?.session_id),
         },
       },
     })
@@ -2772,6 +2815,35 @@ export async function on_cmd(
         kind: "text",
         body: {
           text: skills(list),
+        },
+      },
+    })
+    return true
+  }
+
+  if (cmd.name === "workspaces") {
+    const list = await opencode.workspaces({
+      directory: base.directory,
+    }).catch((err) => {
+      const text = raw(err)
+      if (
+        text.includes("404") ||
+        text.includes("Not Found") ||
+        text.includes("experimental/workspace") ||
+        text.includes("unsupported")
+      ) {
+        return null
+      }
+      throw err
+    })
+    await feishu.reply({
+      msg_id: inbound.message_id,
+      out: {
+        kind: "text",
+        body: {
+          text: list
+            ? workspaces(list, base.directory, base.workspace)
+            : "当前 OpenCode 服务不支持实验接口 /experimental/workspace，暂时无法列出 workspace。",
         },
       },
     })

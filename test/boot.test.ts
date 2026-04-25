@@ -54,7 +54,7 @@ function session(input?: Partial<ImSession>): ImSession {
   }
 }
 
-function cfg() {
+function cfg(input?: Partial<AppCfg["opencode"]>) {
   return {
     log: { level: "info" },
     storage: { path: ":memory:" },
@@ -67,6 +67,7 @@ function cfg() {
         providerID: "openai",
         modelID: "gpt-5.4",
       },
+      ...input,
     },
   } satisfies AppCfg
 }
@@ -111,6 +112,9 @@ function opencode(input?: { status?: Record<string, OpencodeStatus> | null; last
       return null
     },
     async sessions() {
+      return []
+    },
+    async workspaces() {
       return []
     },
     async status(_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> {
@@ -3092,7 +3096,7 @@ describe("commands", () => {
     expect(text).toContain("session: ses_1")
   })
 
-  test("/sessions uses current scope and marks current session", async () => {
+  test("/sessions uses current scope, locally filters exact workspace, and marks current session", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
@@ -3106,9 +3110,10 @@ describe("commands", () => {
     })
     const oc = {
       ...opencode(),
-      async sessions(input: { directory?: string; roots?: boolean; limit?: number }) {
+      async sessions(input: { directory?: string; workspace?: string; roots?: boolean; limit?: number }) {
         expect(input).toEqual({
           directory: "/tmp/chat",
+          workspace: "ws_chat",
           roots: true,
           limit: 8,
         })
@@ -3126,6 +3131,21 @@ describe("commands", () => {
             title: "older",
             directory: "/tmp/chat",
             workspace_id: "ws_chat",
+            created_at: 1,
+            updated_at: 1,
+          },
+          {
+            id: "ses_other_ws",
+            title: "wrong workspace",
+            directory: "/tmp/chat",
+            workspace_id: "ws_other",
+            created_at: 1,
+            updated_at: 1,
+          },
+          {
+            id: "ses_unscoped",
+            title: "unscoped",
+            directory: "/tmp/chat",
             created_at: 1,
             updated_at: 1,
           },
@@ -3151,6 +3171,8 @@ describe("commands", () => {
     expect(text).toContain("[当前] [busy] current")
     expect(text).toContain("session: ses_2")
     expect(text).toContain("目录: /tmp/chat (workspace=ws_chat)")
+    expect(text).not.toContain("wrong workspace")
+    expect(text).not.toContain("unscoped")
   })
 
   test("/sessions surfaces deferred waiting state from local task", async () => {
@@ -3199,6 +3221,203 @@ describe("commands", () => {
     expect(ok).toBeTrue()
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
     expect(text).toContain("[waiting_question] background")
+  })
+
+  test("/sessions filters out sessions from other workspaces in the same directory", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "ws_chat" }))
+    const oc = {
+      ...opencode(),
+      async sessions(input: { directory?: string; workspace?: string; roots?: boolean; limit?: number }) {
+        expect(input).toEqual({
+          directory: "/tmp/chat",
+          workspace: "ws_chat",
+          roots: true,
+          limit: 8,
+        })
+        return [
+          {
+            id: "ses_1",
+            title: "current",
+            directory: "/tmp/chat",
+            workspace_id: "ws_chat",
+            created_at: 1,
+            updated_at: 1,
+          },
+          {
+            id: "ses_other_workspace",
+            title: "other workspace",
+            directory: "/tmp/chat",
+            workspace_id: "ws_other",
+            created_at: 1,
+            updated_at: 1,
+          },
+          {
+            id: "ses_unscoped",
+            title: "unscoped",
+            directory: "/tmp/chat",
+            created_at: 1,
+            updated_at: 1,
+          },
+        ]
+      },
+      async status(input: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp/chat",
+          workspace: "ws_chat",
+        })
+        return {
+          ses_1: { type: "busy" },
+          ses_other_workspace: { type: "busy" },
+          ses_unscoped: { type: "idle" },
+        }
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd("/sessions", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/sessions" }))
+
+    expect(ok).toBeTrue()
+    const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("最近会话（共 1 条）：")
+    expect(text).toContain("[当前] [busy] current")
+    expect(text).not.toContain("other workspace")
+    expect(text).not.toContain("ses_other_workspace")
+    expect(text).not.toContain("ses_unscoped")
+  })
+
+  test("/workspaces lists available workspaces under current directory", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "ws_chat" }))
+    const oc = {
+      ...opencode(),
+      async workspaces(input?: { directory?: string }) {
+        expect(input).toEqual({ directory: "/tmp/chat" })
+        return [
+          {
+            id: "ws_chat",
+            name: "Chat",
+            type: "git",
+            branch: "main",
+            current: true,
+          },
+          {
+            id: "ws_other",
+            name: "Other",
+            type: "git",
+            branch: "feat/demo",
+          },
+        ]
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd("/workspaces", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/workspaces" }))
+
+    expect(ok).toBeTrue()
+    const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("当前目录 /tmp/chat 下的 workspace（共 2 项）：")
+    expect(text).toContain("[当前] Chat (ws_chat)")
+    expect(text).toContain("hint: /repo --workspace ws_other")
+  })
+
+  test("/workspaces shows a clear fallback when experimental endpoint is unsupported", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "ws_chat" }))
+    const oc = {
+      ...opencode(),
+      async workspaces() {
+        throw new Error("opencode request failed: 404 Not Found - /experimental/workspace")
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd("/workspaces", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/workspaces" }))
+
+    expect(ok).toBeTrue()
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: "当前 OpenCode 服务不支持实验接口 /experimental/workspace，暂时无法列出 workspace。",
+      },
+    })
+  })
+
+  test("/sessions keeps current scope unscoped even when global default workspace exists", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ directory: "/tmp/chat", workspace_id: undefined }))
+    await store.save_pref({
+      scope: "chat",
+      tenant_id: "tenant",
+      chat_id: "chat",
+      directory: "/tmp/chat",
+      workspace_id: undefined,
+    })
+    const calls: Array<{ name: string; input: { directory?: string; workspace?: string } }> = []
+    const oc = {
+      ...opencode(),
+      async sessions(input: { directory?: string; workspace?: string; roots?: boolean; limit?: number }) {
+        calls.push({
+          name: "sessions",
+          input: {
+            directory: input.directory,
+            workspace: input.workspace,
+          },
+        })
+        return [
+          {
+            id: "ses_1",
+            title: "current",
+            directory: "/tmp/chat",
+            created_at: 1,
+            updated_at: 1,
+          },
+          {
+            id: "ses_default_ws",
+            title: "scoped",
+            directory: "/tmp/chat",
+            workspace_id: "ws_default",
+            created_at: 1,
+            updated_at: 1,
+          },
+        ]
+      },
+      async status(input: { directory?: string; workspace?: string }) {
+        calls.push({ name: "status", input })
+        return {
+          ses_1: { type: "idle" },
+          ses_default_ws: { type: "busy" },
+        }
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd(
+      "/sessions",
+      cfg({ workspace: "ws_default" }),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({ text: "/sessions" }),
+    )
+
+    expect(ok).toBeTrue()
+    expect(calls).toEqual([
+      { name: "sessions", input: { directory: "/tmp/chat", workspace: undefined } },
+      { name: "status", input: { directory: "/tmp/chat", workspace: undefined } },
+    ])
+    const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("最近会话（共 1 条）：")
+    expect(text).toContain("目录: /tmp/chat")
+    expect(text).not.toContain("workspace=ws_default")
+    expect(text).not.toContain("scoped")
   })
 
   test("/new resets session with chat default scope", async () => {

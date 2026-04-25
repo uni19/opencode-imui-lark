@@ -17,7 +17,7 @@ import { createTaskSvc } from "../src/gateway/task.ts"
 import { createRender } from "../src/render/text.ts"
 import { createMemoryStore } from "../src/storage/db.ts"
 
-function cfg() {
+function cfg(input?: Partial<AppCfg["opencode"]>) {
   return {
     log: { level: "info" },
     storage: { path: ":memory:" },
@@ -26,6 +26,7 @@ function cfg() {
       base_url: "http://127.0.0.1:4096",
       username: "opencode",
       directory: "/tmp",
+      ...input,
     },
   } satisfies AppCfg
 }
@@ -113,6 +114,9 @@ function opencode(input: { status?: Record<string, OpencodeStatus>; last?: strin
     async sessions() {
       return []
     },
+    async workspaces() {
+      return []
+    },
     async status(_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> {
       if (input.fail) throw new Error("status failed")
       return input.status ?? {}
@@ -185,6 +189,182 @@ describe("probe", () => {
         text: "已重新确认：请求已提交，仍在处理中…",
       },
     })
+  })
+
+  test("preserves unscoped runtime workspace for downstream probe calls", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ses = session("ses_unscoped")
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_unscoped"))
+    await store.save_task(row("tsk_unscoped", ses.session_id, "in_unscoped", "running"))
+    const calls: Array<{ name: string; input: { session_id?: string; directory?: string; workspace?: string } }> = []
+    const oc = {
+      ...opencode({
+        status: {},
+      }),
+      async status(input: { directory?: string; workspace?: string }) {
+        calls.push({ name: "status", input })
+        return {}
+      },
+      async sessions(input: { directory?: string; workspace?: string; limit?: number; roots?: boolean }) {
+        calls.push({
+          name: "sessions",
+          input: {
+            directory: input.directory,
+            workspace: input.workspace,
+          },
+        })
+        return [
+          {
+            id: ses.session_id,
+            title: "unscoped",
+            directory: "/tmp",
+            created_at: 1,
+            updated_at: 1,
+          },
+        ]
+      },
+      async result(input: { session_id: string; directory?: string; workspace?: string }): Promise<OpencodeResult> {
+        calls.push({
+          name: "result",
+          input: {
+            session_id: input.session_id,
+            directory: input.directory,
+            workspace: input.workspace,
+          },
+        })
+        return {
+          state: "empty",
+          completed: true,
+        }
+      },
+    } satisfies OpencodeSvc
+
+    const state = await probe(
+      cfg({ workspace: "ws_default" }),
+      store,
+      svc,
+      ui.api,
+      render,
+      oc,
+      (await store.get_task("tsk_unscoped"))!,
+      false,
+    )
+
+    expect(state).toBe("settled")
+    expect(calls).toEqual([
+      { name: "status", input: { directory: "/tmp", workspace: undefined } },
+      { name: "result", input: { session_id: "ses_unscoped", directory: "/tmp", workspace: undefined } },
+      { name: "status", input: { directory: "/tmp", workspace: undefined } },
+      { name: "sessions", input: { directory: "/tmp", workspace: undefined } },
+    ])
+  })
+
+  test("ignores busy descendants from other workspaces when classifying idle probes", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ses = {
+      ...session("ses_workspace_root"),
+      workspace_id: "ws_chat",
+    } satisfies ImSession
+    await store.save_session(ses)
+    await store.save_inbound(inbound("in_workspace_root"))
+    await store.save_task({
+      ...row("tsk_workspace_root", ses.session_id, "in_workspace_root", "running"),
+      workspace_id: "ws_chat",
+    })
+    const calls: Array<{ name: string; input: { session_id?: string; directory?: string; workspace?: string } }> = []
+    const oc = {
+      ...opencode({
+        result: {
+          state: "ok",
+          text: "done",
+          completed: true,
+        },
+      }),
+      async status(input: { directory?: string; workspace?: string }) {
+        calls.push({ name: "status", input })
+        return {
+          ses_other_workspace_child: { type: "busy" },
+        }
+      },
+      async sessions(input: { directory?: string; workspace?: string; limit?: number; roots?: boolean }) {
+        calls.push({
+          name: "sessions",
+          input: {
+            directory: input.directory,
+            workspace: input.workspace,
+          },
+        })
+        return [
+          {
+            id: ses.session_id,
+            title: "current",
+            directory: "/tmp",
+            workspace_id: "ws_chat",
+            created_at: 1,
+            updated_at: 1,
+          },
+          {
+            id: "ses_other_workspace_child",
+            title: "other workspace child",
+            directory: "/tmp",
+            workspace_id: "ws_other",
+            parent_id: ses.session_id,
+            created_at: 1,
+            updated_at: 1,
+          },
+        ]
+      },
+      async result(input: { session_id: string; directory?: string; workspace?: string }): Promise<OpencodeResult> {
+        calls.push({
+          name: "result",
+          input: {
+            session_id: input.session_id,
+            directory: input.directory,
+            workspace: input.workspace,
+          },
+        })
+        return {
+          state: "ok",
+          text: "done",
+          completed: true,
+        }
+      },
+    } satisfies OpencodeSvc
+
+    const state = await probe(
+      cfg({ workspace: "ws_default" }),
+      store,
+      svc,
+      ui.api,
+      render,
+      oc,
+      (await store.get_task("tsk_workspace_root"))!,
+      false,
+    )
+
+    expect(state).toBe("settled")
+    expect(calls).toEqual([
+      { name: "status", input: { directory: "/tmp", workspace: "ws_chat" } },
+      { name: "result", input: { session_id: "ses_workspace_root", directory: "/tmp", workspace: "ws_chat" } },
+      { name: "status", input: { directory: "/tmp", workspace: "ws_chat" } },
+      { name: "sessions", input: { directory: "/tmp", workspace: "ws_chat" } },
+    ])
+    expect((await store.get_task("tsk_workspace_root"))).toMatchObject({
+      status: "completed",
+      terminal_kind: "final",
+    })
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject(
+      render.final({
+        text: "done",
+      }),
+    )
   })
 
   test("checkpoints running task on first idle probe and settles on repeated identical output", async () => {
