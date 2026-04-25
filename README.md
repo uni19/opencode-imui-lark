@@ -163,7 +163,7 @@ Feishu Open Platform
 - 群聊已支持 `@bot` 起新会话，并按 `tenant + chat + thread/root` 隔离上下文；同一 thread 内后续回复可直接继续
 - 已支持当前会话、当前聊天、当前用户三层 repo 绑定；新会话按“会话显式绑定 > 聊天默认 > 用户默认 > 全局默认”选目录
 - 已支持飞书图片、文件和 `post` 富文本消息；多图、图文混排会统一拆成 `text + file parts`，附件-only 输入会先进入“等待补充说明”，用户补一条文本后再一起送入 OpenCode
-- `/session`、`/model`、`/repo`、`/workspace` 相关命令已补自动化回归
+- `/session`、`/model`、`/repo`、`/workspaces` 相关命令已补自动化回归
 - 多图、多附件、附件-only 补充说明、最终回复过滤内部文本等关键多模态场景已补自动化回归
 
 ## 环境变量
@@ -238,7 +238,8 @@ OPENCODE_DIRECTORY=/absolute/path/to/your/worktree
 - `/repo <directory>`: 为当前会话绑定目录；若目录变更，会同步切换到新的 OpenCode session
 - `/repo --chat <directory>`: 为当前聊天设置默认目录，后续新会话优先继承
 - `/repo --me <directory>`: 为当前用户设置默认目录，跨聊天复用
-- `/sessions`: 查看当前目录下最近会话
+- `/sessions`: 查看当前目录 / workspace 下最近会话
+- `/workspaces`: 查看当前目录下可用 workspace
 - `/model`: 查看当前模型和默认模型
 - `/model <provider>/<model_id>`: 为当前会话切换模型
 - `/model reset`: 恢复当前会话到默认模型

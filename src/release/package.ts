@@ -182,6 +182,7 @@ export function renderPackageReadme(version: string, target: Target) {
     "- `/abort`",
     "- `/repo`",
     "- `/sessions`",
+    "- `/workspaces`",
     "- `/model`",
     "",
     "## 8. 常见问题",

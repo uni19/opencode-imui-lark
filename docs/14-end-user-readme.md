@@ -208,6 +208,7 @@ opencode-feishu-imui-service uninstall
 - `/abort`
 - `/repo`
 - `/sessions`
+- `/workspaces`
 - `/model`
 
 ## 9. 常见问题
