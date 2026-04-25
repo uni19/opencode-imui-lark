@@ -214,6 +214,14 @@ export type OpencodeSession = {
   updated_at: number
 }
 
+export type OpencodeWorkspace = {
+  id: string
+  name?: string
+  type?: string
+  branch?: string
+  current?: boolean
+}
+
 export type OpencodeStatus =
   | {
       type: "idle"
@@ -414,7 +422,8 @@ export type TaskSvc = {
 export type OpencodeSvc = {
   ensure(input: { directory?: string; workspace?: string; session_id?: string }): Promise<{ id: string }>
   session(id: string): Promise<OpencodeSession | null>
-  sessions(input: { directory?: string; limit?: number; roots?: boolean }): Promise<OpencodeSession[]>
+  sessions(input: { directory?: string; workspace?: string; limit?: number; roots?: boolean }): Promise<OpencodeSession[]>
+  workspaces(input?: { directory?: string }): Promise<OpencodeWorkspace[]>
   status(input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>>
   commands(input?: { directory?: string; workspace?: string }): Promise<OpencodeCommand[]>
   skills(input?: { directory?: string; workspace?: string }): Promise<OpencodeSkill[]>

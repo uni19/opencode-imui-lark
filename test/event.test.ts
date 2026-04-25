@@ -99,6 +99,9 @@ function opencode(last?: string, result?: OpencodeResult) {
     async sessions() {
       return []
     },
+    async workspaces() {
+      return []
+    },
     async status() {
       return {}
     },

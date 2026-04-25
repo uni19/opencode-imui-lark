@@ -108,6 +108,9 @@ function opencode() {
     async sessions() {
       return []
     },
+    async workspaces() {
+      return []
+    },
     async status(_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> {
       return {}
     },

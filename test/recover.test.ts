@@ -102,6 +102,9 @@ function opencode(input: { status?: Record<string, OpencodeStatus> | null; last?
     async sessions() {
       return []
     },
+    async workspaces() {
+      return []
+    },
     async status(_input: { directory?: string; workspace?: string }): Promise<Record<string, OpencodeStatus>> {
       if (input.status === null) throw new Error("status failed")
       return input.status ?? {}
