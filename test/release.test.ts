@@ -19,6 +19,7 @@ describe("release check", () => {
       "## 当前支持的 IM 命令",
       "- `/session <session_id>`: 切换当前会话",
       "- `/repo --chat <directory>`: 为当前聊天设置默认目录",
+      "- `/workspaces`: 查看当前目录下可用 workspace",
       "- `/model reset`: 恢复当前会话到默认模型",
       "",
       "## 其他段落",
@@ -28,14 +29,15 @@ describe("release check", () => {
       "## B. Slash 命令主链",
       "- [ ] `/session <id>`",
       "- [ ] `/repo --chat <directory>`",
+      "- [ ] `/workspaces`",
       "- [ ] `/model reset`",
       "- [ ] 未命中的 slash 能正确透传或明确失败",
       "",
       "## C. 审批与追问",
     ].join("\n")
 
-    expect(names(list(readme, "## 当前支持的 IM 命令"))).toEqual(["/session", "/repo", "/model"])
-    expect(names(list(rel, "## B. Slash 命令主链"))).toEqual(["/session", "/repo", "/model"])
+    expect(names(list(readme, "## 当前支持的 IM 命令"))).toEqual(["/session", "/repo", "/workspaces", "/model"])
+    expect(names(list(rel, "## B. Slash 命令主链"))).toEqual(["/session", "/repo", "/workspaces", "/model"])
   })
 
   test("flags machine-specific absolute paths in README", async () => {
@@ -88,7 +90,8 @@ describe("release check", () => {
           "- `/new`: 新建会话",
           "- `/session`: 查看或切换当前会话",
           "- `/repo`: 查看或绑定目录 / workspace",
-          "- `/sessions`: 查看当前目录下最近会话",
+          "- `/sessions`: 查看当前目录 / workspace 下最近会话",
+          "- `/workspaces`: 查看当前目录下可用 workspace",
           "- `/model`: 查看或切换当前模型",
           "- `/skills`: 查看当前目录 / workspace 下可用技能",
           "- `/commands`: 查看当前目录 / workspace 下可转发 slash 命令",
@@ -119,6 +122,7 @@ describe("release check", () => {
           "- [ ] `/session <id>`",
           "- [ ] `/repo --chat <directory>`",
           "- [ ] `/sessions`",
+          "- [ ] `/workspaces`",
           "- [ ] `/model`",
           "- [ ] `/commands`",
           "",

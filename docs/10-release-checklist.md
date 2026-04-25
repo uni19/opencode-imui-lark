@@ -133,6 +133,7 @@ bun run release:smoke
 - [ ] `/new`
 - [ ] `/abort`
 - [ ] `/sessions`
+- [ ] `/workspaces`
 - [ ] `/session <id>`
 - [ ] 正在运行中的 session 可切走到后台继续执行
 - [ ] `/repo`
