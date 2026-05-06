@@ -11,6 +11,10 @@ type Input = {
 
 const now = () => Date.now()
 
+function has<K extends string>(input: object, key: K): input is Record<K, unknown> {
+  return Object.prototype.hasOwnProperty.call(input, key)
+}
+
 async function pref(input: Input, val: { tenant_id: string; chat_id: string; user_id: string }) {
   const chat = await input.store.get_pref({
     scope: "chat",
@@ -156,7 +160,7 @@ export function createSessionSvc(input: Input): SessionSvc {
       const items = await input.store.get_session_by_opencode(val.session_id)
       if (!items) return null
       const directory = val.directory ?? items.directory
-      const workspace_id = val.workspace_id ?? items.workspace_id
+      const workspace_id = has(val, "workspace_id") ? val.workspace_id : items.workspace_id
       const reset = directory !== items.directory || workspace_id !== items.workspace_id
       const session = reset
         ? await input.opencode.ensure({

@@ -354,6 +354,83 @@ describe("message flow", () => {
     expect(ai.prompts[0]).not.toHaveProperty("agent")
   })
 
+  test("repo rebind clears stale workspace when directory changes and workspace is omitted", async () => {
+    const store = createMemoryStore()
+    const ai = opencode()
+    const conf = cfg()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+    })
+
+    const current = await route.resolve({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+    })
+    const scoped = await route.bind({
+      session_id: current.session_id,
+      workspace_id: "ws_alt",
+    })
+    if (!scoped) throw new Error("missing scoped session")
+
+    const rebound = await route.bind({
+      session_id: scoped.session_id,
+      directory: "/tmp/alt",
+      workspace_id: undefined,
+    })
+    if (!rebound) throw new Error("missing rebound session")
+
+    expect(rebound).toMatchObject({
+      directory: "/tmp/alt",
+      workspace_id: undefined,
+    })
+    expect(rebound.session_id).not.toBe(scoped.session_id)
+  })
+
+  test("repo rebind preserves workspace when directory is unchanged and workspace is omitted", async () => {
+    const store = createMemoryStore()
+    const ai = opencode()
+    const conf = cfg()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+    })
+
+    const current = await route.resolve({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+    })
+    const scoped = await route.bind({
+      session_id: current.session_id,
+      workspace_id: "ws_alt",
+    })
+    if (!scoped) throw new Error("missing scoped session")
+
+    const rebound = await route.bind({
+      session_id: scoped.session_id,
+      directory: "/tmp",
+    })
+    if (!rebound) throw new Error("missing rebound session")
+
+    expect(rebound).toMatchObject({
+      session_id: scoped.session_id,
+      directory: "/tmp",
+      workspace_id: "ws_alt",
+    })
+  })
+
   test("repo rebind keeps explicit session model override", async () => {
 
     const store = createMemoryStore()
