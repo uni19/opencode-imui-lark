@@ -1153,6 +1153,18 @@ function exact_workspace(current?: string, target?: string) {
   return current === target
 }
 
+function repo_workspace_binding(input: {
+  current_directory?: string
+  current_workspace?: string
+  next_directory?: string
+  next_workspace?: string
+  workspace_present: boolean
+}) {
+  if (input.workspace_present) return input.next_workspace
+  if (input.next_directory !== undefined && input.next_directory !== input.current_directory) return undefined
+  return input.current_workspace
+}
+
 function exact_session_scope(
   list: Awaited<ReturnType<OpencodeSvc["sessions"]>>,
   input: { directory?: string; workspace?: string },
@@ -3105,7 +3117,7 @@ export async function on_cmd(
 
   if (cmd.name === "repo") {
     if (cmd.scope === "chat") {
-      if (!cmd.arg && !cmd.workspace) {
+      if (!cmd.arg && !cmd.workspace_present) {
         await feishu.reply({
           msg_id: inbound.message_id,
           out: {
@@ -3115,19 +3127,27 @@ export async function on_cmd(
         })
         return true
       }
+      const directory = cmd.arg ?? pref.chat?.directory
+      const workspace_id = repo_workspace_binding({
+        current_directory: pref.chat?.directory,
+        current_workspace: pref.chat?.workspace_id,
+        next_directory: cmd.arg,
+        next_workspace: cmd.workspace,
+        workspace_present: cmd.workspace_present,
+      })
       await store.save_pref({
         scope: "chat",
         tenant_id: inbound.tenant_id,
         chat_id: inbound.chat_id,
-        directory: cmd.arg ?? pref.chat?.directory,
-        workspace_id: cmd.workspace ?? pref.chat?.workspace_id,
+        directory,
+        workspace_id,
       })
       await feishu.reply({
         msg_id: inbound.message_id,
         out: {
           kind: "text",
           body: {
-            text: `已设置当前聊天默认绑定：${repo(cmd.arg ?? pref.chat?.directory, cmd.workspace ?? pref.chat?.workspace_id)}`,
+            text: `已设置当前聊天默认绑定：${repo(directory, workspace_id)}`,
           },
         },
       })
@@ -3135,7 +3155,7 @@ export async function on_cmd(
     }
 
     if (cmd.scope === "user") {
-      if (!cmd.arg && !cmd.workspace) {
+      if (!cmd.arg && !cmd.workspace_present) {
         await feishu.reply({
           msg_id: inbound.message_id,
           out: {
@@ -3145,26 +3165,34 @@ export async function on_cmd(
         })
         return true
       }
+      const directory = cmd.arg ?? pref.user?.directory
+      const workspace_id = repo_workspace_binding({
+        current_directory: pref.user?.directory,
+        current_workspace: pref.user?.workspace_id,
+        next_directory: cmd.arg,
+        next_workspace: cmd.workspace,
+        workspace_present: cmd.workspace_present,
+      })
       await store.save_pref({
         scope: "user",
         tenant_id: inbound.tenant_id,
         user_id: inbound.user_id,
-        directory: cmd.arg ?? pref.user?.directory,
-        workspace_id: cmd.workspace ?? pref.user?.workspace_id,
+        directory,
+        workspace_id,
       })
       await feishu.reply({
         msg_id: inbound.message_id,
         out: {
           kind: "text",
           body: {
-            text: `已设置当前用户默认绑定：${repo(cmd.arg ?? pref.user?.directory, cmd.workspace ?? pref.user?.workspace_id)}`,
+            text: `已设置当前用户默认绑定：${repo(directory, workspace_id)}`,
           },
         },
       })
       return true
     }
 
-    if (!cmd.arg && !cmd.workspace) {
+    if (!cmd.arg && !cmd.workspace_present) {
       await feishu.reply({
         msg_id: inbound.message_id,
         out: {
@@ -3194,10 +3222,17 @@ export async function on_cmd(
       await store.drop_task_pending(last.id)
       await task.abort(last.id)
     }
+    const workspace_id = repo_workspace_binding({
+      current_directory: item.directory,
+      current_workspace: item.workspace_id,
+      next_directory: cmd.arg,
+      next_workspace: cmd.workspace,
+      workspace_present: cmd.workspace_present,
+    })
     const next = await route.bind({
       session_id: item.session_id,
       directory: cmd.arg,
-      workspace_id: cmd.workspace,
+      ...(cmd.workspace_present || (cmd.arg !== undefined && cmd.arg !== item.directory) ? { workspace_id } : {}),
     })
     await feishu.reply({
       msg_id: inbound.message_id,
@@ -3205,7 +3240,7 @@ export async function on_cmd(
         kind: "text",
         body: {
           text: [
-            `已绑定：${repo(next?.directory ?? cmd.arg, next?.workspace_id ?? cmd.workspace)}`,
+            `已绑定：${repo(next?.directory ?? cmd.arg ?? item.directory, next ? next.workspace_id : workspace_id)}`,
             next && next.session_id !== item.session_id ? "已切换到新会话。" : undefined,
           ]
             .filter(Boolean)

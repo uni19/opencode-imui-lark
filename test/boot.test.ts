@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test"
 import { body, guide, holdmsg, moremsg, on_cmd, on_conn, on_msg, permit, pick, publish, recover, status_text } from "../src/app/boot.ts"
 import type { AppCfg, ConnState, FeishuApi, ImSession, InboundMessage, OpencodeResult, OpencodeSession, OpencodeStatus, OpencodeSvc, RenderOut, SessionSvc, Task } from "../src/contracts.ts"
+import { createSessionSvc } from "../src/gateway/session.ts"
 import { createTaskSvc } from "../src/gateway/task.ts"
 import { createRender } from "../src/render/text.ts"
 import { createMemoryStore } from "../src/storage/db.ts"
@@ -3039,6 +3040,44 @@ describe("commands", () => {
     })
   })
 
+
+  test("/repo --chat changes directory without workspace and clears stale workspace binding", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_pref({
+      scope: "chat",
+      tenant_id: "tenant",
+      chat_id: "chat",
+      directory: "/tmp/chat",
+      workspace_id: "ws_chat",
+    })
+
+    const ok = await on_cmd(
+      "/repo --chat /tmp/chat-next",
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      opencode(),
+      inbound({ text: "/repo --chat /tmp/chat-next" }),
+    )
+
+    expect(ok).toBeTrue()
+    expect(await store.get_pref({ scope: "chat", tenant_id: "tenant", chat_id: "chat" })).toMatchObject({
+      directory: "/tmp/chat-next",
+      workspace_id: undefined,
+    })
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: "已设置当前聊天默认绑定：/tmp/chat-next",
+      },
+    })
+  })
+
   test("/status explains current session and scope context", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
@@ -3509,6 +3548,44 @@ describe("commands", () => {
     })
   })
 
+
+  test("/repo --me changes directory without workspace and clears stale workspace binding", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_pref({
+      scope: "user",
+      tenant_id: "tenant",
+      user_id: "user",
+      directory: "/tmp/me",
+      workspace_id: "ws_me",
+    })
+
+    const ok = await on_cmd(
+      "/repo --me /tmp/me-next",
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      opencode(),
+      inbound({ text: "/repo --me /tmp/me-next" }),
+    )
+
+    expect(ok).toBeTrue()
+    expect(await store.get_pref({ scope: "user", tenant_id: "tenant", user_id: "user" })).toMatchObject({
+      directory: "/tmp/me-next",
+      workspace_id: undefined,
+    })
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: "已设置当前用户默认绑定：/tmp/me-next",
+      },
+    })
+  })
+
   test("/repo --workspace binds current session and switches when scope changes", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
@@ -3532,6 +3609,107 @@ describe("commands", () => {
       kind: "text",
       body: {
         text: ["已绑定：/tmp (workspace=ws_local)", "已切换到新会话。"].join("\n"),
+      },
+    })
+  })
+
+
+  test("/repo changes directory without workspace, clears stale workspace, and does not auto-create one", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ directory: "/tmp/current", workspace_id: "ws_current" }))
+    const ensure_calls: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
+    let workspaces_calls = 0
+    const oc = {
+      ...opencode(),
+      async ensure(input: { directory?: string; workspace?: string; session_id?: string }) {
+        ensure_calls.push(input)
+        return { id: "ses_rebound" }
+      },
+      async workspaces() {
+        workspaces_calls += 1
+        return []
+      },
+    } satisfies OpencodeSvc
+    const actual_route = createSessionSvc({
+      store,
+      opencode: oc,
+      directory: "/tmp",
+      workspace: undefined,
+    })
+
+    const ok = await on_cmd(
+      "/repo /tmp/next",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({ text: "/repo /tmp/next" }),
+    )
+
+    expect(ok).toBeTrue()
+    expect(ensure_calls).toEqual([{ directory: "/tmp/next", workspace: undefined }])
+    expect(workspaces_calls).toBe(0)
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      session_id: "ses_rebound",
+      directory: "/tmp/next",
+      workspace_id: undefined,
+    })
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: ["已绑定：/tmp/next", "已切换到新会话。"].join("\n"),
+      },
+    })
+  })
+
+  test("/repo omitting workspace preserves existing binding when directory is unchanged", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ directory: "/tmp/current", workspace_id: "ws_current" }))
+    const ensure_calls: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
+    const oc = {
+      ...opencode(),
+      async ensure(input: { directory?: string; workspace?: string; session_id?: string }) {
+        ensure_calls.push(input)
+        return { id: "ses_should_not_change" }
+      },
+    } satisfies OpencodeSvc
+    const actual_route = createSessionSvc({
+      store,
+      opencode: oc,
+      directory: "/tmp",
+      workspace: undefined,
+    })
+
+    const ok = await on_cmd(
+      "/repo /tmp/current",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({ text: "/repo /tmp/current" }),
+    )
+
+    expect(ok).toBeTrue()
+    expect(ensure_calls).toEqual([])
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      session_id: "ses_1",
+      directory: "/tmp/current",
+      workspace_id: "ws_current",
+    })
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: "已绑定：/tmp/current (workspace=ws_current)",
       },
     })
   })
