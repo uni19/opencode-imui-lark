@@ -8,6 +8,31 @@ describe("parseCmd", () => {
       scope: "chat",
       arg: "/tmp/demo",
       workspace: "ws_local",
+      workspace_present: true,
+    })
+  })
+
+  test("records whether repo workspace flag was explicitly present", () => {
+    expect(parseCmd("/repo /tmp/demo")).toEqual({
+      name: "repo",
+      scope: "session",
+      arg: "/tmp/demo",
+      workspace: undefined,
+      workspace_present: false,
+    })
+    expect(parseCmd("/repo /tmp/demo --workspace")).toEqual({
+      name: "repo",
+      scope: "session",
+      arg: "/tmp/demo",
+      workspace: undefined,
+      workspace_present: true,
+    })
+    expect(parseCmd("/repo --workspace --chat /tmp/demo")).toEqual({
+      name: "repo",
+      scope: "chat",
+      arg: "/tmp/demo",
+      workspace: undefined,
+      workspace_present: true,
     })
   })
 
@@ -24,6 +49,7 @@ describe("parseCmd", () => {
       scope: "session",
       arg: undefined,
       workspace: "ws_local",
+      workspace_present: true,
     })
   })
 
@@ -55,6 +81,7 @@ describe("parseCmd", () => {
       scope: "user",
       arg: "/tmp/me",
       workspace: "ws_me",
+      workspace_present: true,
     })
   })
 

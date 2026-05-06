@@ -12,13 +12,20 @@ type Cmd =
   | { name: "model"; arg?: string }
   | { name: "models" }
   | { name: "mcps" }
-  | { name: "repo"; scope: "session" | "chat" | "user"; arg?: string; workspace?: string }
+  | {
+      name: "repo"
+      scope: "session" | "chat" | "user"
+      arg?: string
+      workspace?: string
+      workspace_present: boolean
+    }
   | { name: "slash"; command: string; arguments: string }
 
 function repo(tail: string[]) {
   let scope: "session" | "chat" | "user" = "session"
   let arg: string | undefined
   let workspace: string | undefined
+  let workspace_present = false
 
   for (let i = 0; i < tail.length; i++) {
     const item = tail[i]
@@ -31,14 +38,18 @@ function repo(tail: string[]) {
       continue
     }
     if (item === "--workspace") {
-      workspace = tail[i + 1] || undefined
-      i += 1
+      workspace_present = true
+      const next = tail[i + 1]
+      if (next && !next.startsWith("--")) {
+        workspace = next
+        i += 1
+      }
       continue
     }
     if (!arg) arg = item
   }
 
-  return { name: "repo" as const, scope, arg, workspace }
+  return { name: "repo" as const, scope, arg, workspace, workspace_present }
 }
 
 export function parseCmd(text: string): Cmd | null {
