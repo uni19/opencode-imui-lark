@@ -336,6 +336,46 @@ describe("sqlite store", () => {
     await reopened.close?.()
   })
 
+  test("replaces a persisted pending_new placeholder with a real active session on the same map key", async () => {
+    const db = file()
+    const placeholder = session({
+      id: "ims_pending",
+      session_id: "pending_new:ses_placeholder",
+      state: "pending_new",
+      directory: "/tmp/pending",
+      workspace_id: "ws_pending",
+      created_at: 1,
+      updated_at: 1,
+    })
+    const active = {
+      ...placeholder,
+      session_id: "ses_real",
+      state: "active" as const,
+      updated_at: 2,
+    } satisfies ImSession
+
+    const a = createSqliteStore(db)
+    await a.save_session(placeholder)
+    await a.close?.()
+
+    const b = createSqliteStore(db)
+    expect(await b.get_session({ tenant_id: "tenant", chat_id: "chat" })).toMatchObject(placeholder)
+    expect(await b.get_session_by_opencode(placeholder.session_id)).toMatchObject(placeholder)
+
+    await b.save_session(active)
+
+    expect(await b.get_session({ tenant_id: "tenant", chat_id: "chat" })).toMatchObject(active)
+    expect(await b.get_session_by_opencode(placeholder.session_id)).toBeNull()
+    expect(await b.get_session_by_opencode(active.session_id)).toMatchObject(active)
+    await b.close?.()
+
+    const c = createSqliteStore(db)
+    expect(await c.get_session({ tenant_id: "tenant", chat_id: "chat" })).toMatchObject(active)
+    expect(await c.get_session_by_opencode(placeholder.session_id)).toBeNull()
+    expect(await c.get_session_by_opencode(active.session_id)).toMatchObject(active)
+    await c.close?.()
+  })
+
   test("keeps only the latest session mapping", async () => {
     const db = createSqliteStore(file())
     const old = session({

@@ -49,6 +49,8 @@ export type InboundMessage = Inbound & {
 
 export type InboundEvent = InboundMessage
 
+export type ImSessionState = "active" | "pending_new" | "archived" | "error"
+
 export type ImSession = {
   id: string
   platform: "feishu"
@@ -62,7 +64,7 @@ export type ImSession = {
   directory?: string
   workspace_id?: string
   model?: OpencodeModel
-  state: "active" | "archived" | "error"
+  state: ImSessionState
   created_at: number
   updated_at: number
 }

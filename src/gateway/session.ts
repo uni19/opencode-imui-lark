@@ -10,9 +10,18 @@ type Input = {
 }
 
 const now = () => Date.now()
+const pending_session_prefix = "pending_new:"
 
 function has<K extends string>(input: object, key: K): input is Record<K, unknown> {
   return Object.prototype.hasOwnProperty.call(input, key)
+}
+
+export function pending_session_id() {
+  return pending_session_prefix + crypto.randomUUID()
+}
+
+export function is_pending_session(row?: Pick<ImSession, "state"> | null) {
+  return row?.state === "pending_new"
 }
 
 async function pref(input: Input, val: { tenant_id: string; chat_id: string; user_id: string }) {
@@ -48,6 +57,7 @@ function create(
   directory?: string,
   workspace_id?: string,
   model?: ImSession["model"],
+  state: ImSession["state"] = "active",
 ): ImSession {
   const time = now()
   return {
@@ -63,10 +73,25 @@ function create(
     directory,
     workspace_id,
     model,
-    state: "active",
+    state,
     created_at: time,
     updated_at: time,
   }
+}
+
+async function materialize_pending(input: Input, row: ImSession): Promise<ImSession> {
+  const result = await input.opencode.ensure({
+    directory: row.directory,
+    workspace: row.workspace_id,
+  })
+  const next = {
+    ...row,
+    session_id: result.id,
+    state: "active" as const,
+    updated_at: now(),
+  }
+  await input.store.save_session(next)
+  return next
 }
 
 export function createSessionSvc(input: Input): SessionSvc {
@@ -77,7 +102,10 @@ export function createSessionSvc(input: Input): SessionSvc {
         chat_id: val.chat_id,
         thread_id: val.thread_id,
       })
-      if (existing) return existing
+      if (existing) {
+        if (is_pending_session(existing)) return materialize_pending(input, existing)
+        return existing
+      }
       const bind = await pref(input, val)
       const result = await input.opencode.ensure({
         directory: bind.directory,
@@ -101,10 +129,6 @@ export function createSessionSvc(input: Input): SessionSvc {
 
     async reset(val) {
       const bind = await pref(input, val)
-      const result = await input.opencode.ensure({
-        directory: bind.directory,
-        workspace: bind.workspace_id,
-      })
       const next = create(
         val.tenant_id,
         val.chat_id,
@@ -112,10 +136,11 @@ export function createSessionSvc(input: Input): SessionSvc {
         val.thread_id,
         val.root_message_id,
         val.user_id,
-        result.id,
+        pending_session_id(),
         bind.directory,
         bind.workspace_id,
         input.model,
+        "pending_new",
       )
       await input.store.save_session(next)
       return next
@@ -138,6 +163,7 @@ export function createSessionSvc(input: Input): SessionSvc {
             directory: val.session.directory,
             workspace_id: val.session.workspace_id,
             model: known?.model ?? current.model ?? input.model,
+            state: "active" as const,
             updated_at: now(),
           }
         : create(
@@ -162,7 +188,7 @@ export function createSessionSvc(input: Input): SessionSvc {
       const directory = val.directory ?? items.directory
       const workspace_id = has(val, "workspace_id") ? val.workspace_id : items.workspace_id
       const reset = directory !== items.directory || workspace_id !== items.workspace_id
-      const session = reset
+      const session = !is_pending_session(items) && reset
         ? await input.opencode.ensure({
             directory,
             workspace: workspace_id,
