@@ -565,6 +565,57 @@ describe("opencode client", () => {
     ])
   })
 
+  test("sessions keeps config directory for undefined and omits directory when caller passes empty string", async () => {
+    const urls = capture_fetch([])
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "ws_default",
+      }),
+    )
+
+    await svc.sessions({
+      directory: undefined,
+      workspace: "ws_local",
+      roots: true,
+      limit: 8,
+    })
+    await svc.sessions({
+      directory: "",
+      workspace: "ws_local",
+      roots: true,
+      limit: 8,
+    })
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+          roots: url.searchParams.get("roots"),
+          limit: url.searchParams.get("limit"),
+        }
+      }),
+    ).toEqual([
+      {
+        path: "/session",
+        directory: "/tmp/default-scope",
+        workspace: "ws_local",
+        roots: "true",
+        limit: "8",
+      },
+      {
+        path: "/session",
+        directory: null,
+        workspace: "ws_local",
+        roots: "true",
+        limit: "8",
+      },
+    ])
+  })
+
   test("sessions forwards explicit workspace query and preserves unscoped omission", async () => {
     const urls = capture_fetch([])
     const svc = createOpencodeSvc(

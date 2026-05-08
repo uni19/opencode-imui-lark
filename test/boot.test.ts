@@ -105,8 +105,10 @@ function feishu(input?: { patch_err?: string }) {
 }
 
 function opencode(input?: { status?: Record<string, OpencodeStatus> | null; last?: string | undefined; result?: OpencodeResult }) {
-  return {
-    async ensure() {
+  const ensures: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
+  const svc = {
+    async ensure(payload?: { directory?: string; workspace?: string; session_id?: string }) {
+      ensures.push(payload ?? {})
       return { id: "ses_1" }
     },
     async session() {
@@ -154,6 +156,9 @@ function opencode(input?: { status?: Record<string, OpencodeStatus> | null; last
       return { state: "empty" as const }
     },
   } satisfies OpencodeSvc
+  return Object.assign(svc, {
+    ensures,
+  })
 }
 
 async function saveWait(store: ReturnType<typeof createMemoryStore>, input: {
@@ -372,6 +377,7 @@ describe("boot helpers", () => {
       session_id: "ses_1",
       directory: "/tmp/work",
       workspace_id: "ws_1",
+      state: "active" as const,
     }
     const message = {
       name: "message",
@@ -3459,7 +3465,898 @@ describe("commands", () => {
     expect(text).not.toContain("scoped")
   })
 
-  test("/new resets session with chat default scope", async () => {
+  test("/new followed by /sessions lists same-directory pending history regardless of workspace without a synthetic current session", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ensure_calls: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
+    const session_inputs: Array<{ directory?: string; workspace?: string; roots?: boolean; limit?: number }> = []
+    let status_calls = 0
+    const oc = {
+      ...opencode(),
+      async ensure(input: { directory?: string; workspace?: string; session_id?: string }) {
+        ensure_calls.push(input)
+        return { id: "ses_new" }
+      },
+      async sessions(input: { directory?: string; workspace?: string; roots?: boolean; limit?: number }) {
+        session_inputs.push(input)
+        expect(input).toEqual({
+          directory: "/tmp/local-new",
+          workspace: undefined,
+          roots: true,
+          limit: 8,
+        })
+        return [
+          {
+            id: "ses_new",
+            title: "New session - 2026-05-06T13:31:05.597Z",
+            directory: "/tmp/local-new",
+            workspace_id: "ws_local_new",
+            created_at: 3,
+            updated_at: 3,
+          },
+          {
+            id: "ses_other_ws",
+            title: "Other workspace",
+            directory: "/tmp/local-new",
+            workspace_id: "ws_other",
+            created_at: 4,
+            updated_at: 4,
+          },
+          {
+            id: "ses_unscoped",
+            title: "Unscoped",
+            directory: "/tmp/local-new",
+            created_at: 5,
+            updated_at: 5,
+          },
+          {
+            id: "ses_other_dir",
+            title: "other dir",
+            directory: "/tmp/elsewhere",
+            workspace_id: "ws_local_new",
+            created_at: 6,
+            updated_at: 6,
+          },
+        ] satisfies OpencodeSession[]
+      },
+      async status(input: { directory?: string; workspace?: string }) {
+        status_calls += 1
+        expect(input).toEqual({
+          directory: "/tmp/local-new",
+          workspace: undefined,
+        })
+        return {
+          ses_new: { type: "idle" },
+          ses_other_ws: { type: "busy" },
+          ses_unscoped: { type: "idle" },
+          ses_other_dir: { type: "busy" },
+        }
+      },
+    } satisfies OpencodeSvc
+    const actual_route = createSessionSvc({
+      store,
+      opencode: oc,
+      directory: "/tmp/local-new",
+      workspace: "ws_local_new",
+    })
+
+    const created = await on_cmd(
+      "/new",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_new",
+        event_id: "evt_new",
+        message_id: "msg_new",
+        text: "/new",
+      }),
+    )
+
+    expect(created).toBeTrue()
+    expect(ensure_calls).toEqual([])
+
+    const listed = await on_cmd(
+      "/sessions",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_sessions_new",
+        event_id: "evt_sessions_new",
+        message_id: "msg_sessions_new",
+        text: "/sessions",
+      }),
+    )
+
+    expect(listed).toBeTrue()
+    expect(session_inputs).toEqual([
+      {
+        directory: "/tmp/local-new",
+        workspace: undefined,
+        roots: true,
+        limit: 8,
+      },
+    ])
+    expect(status_calls).toBe(1)
+    const text = ((ui.list[1]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("最近会话（共 3 条）：")
+    expect(text).toContain("session: ses_new")
+    expect(text).toContain("session: ses_other_ws")
+    expect(text).toContain("session: ses_unscoped")
+    expect(text).toContain("[busy] Other workspace")
+    expect(text).toContain("目录: /tmp/local-new")
+    expect(text).not.toContain("[当前]")
+    expect(text).not.toContain("pending_new:")
+    expect(text).not.toContain("other dir")
+  })
+
+  test("/repo followed by /sessions falls back to the rebound local current session when remote exact scope is empty", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    await store.save_session(session({ session_id: "ses_current", directory: "/tmp", workspace_id: undefined }))
+    const ensure_calls: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
+    const session_inputs: Array<{ directory?: string; workspace?: string; roots?: boolean; limit?: number }> = []
+    let status_calls = 0
+    const oc = {
+      ...opencode(),
+      async ensure(input: { directory?: string; workspace?: string; session_id?: string }) {
+        ensure_calls.push(input)
+        return { id: "ses_rebound" }
+      },
+      async sessions(input: { directory?: string; workspace?: string; roots?: boolean; limit?: number }) {
+        session_inputs.push(input)
+        return []
+      },
+      async status(input: { directory?: string; workspace?: string }) {
+        status_calls += 1
+        expect(input).toEqual({
+          directory: "/tmp",
+          workspace: "ws_local",
+        })
+        return {}
+      },
+    } satisfies OpencodeSvc
+    const actual_route = createSessionSvc({
+      store,
+      opencode: oc,
+      directory: "/tmp",
+      workspace: undefined,
+    })
+
+    const rebound = await on_cmd(
+      "/repo --workspace ws_local",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_repo",
+        event_id: "evt_repo",
+        message_id: "msg_repo",
+        text: "/repo --workspace ws_local",
+      }),
+    )
+
+    expect(rebound).toBeTrue()
+    expect(ensure_calls).toEqual([{ directory: "/tmp", workspace: "ws_local" }])
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      session_id: "ses_rebound",
+      directory: "/tmp",
+      workspace_id: "ws_local",
+    })
+
+    const listed = await on_cmd(
+      "/sessions",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_sessions_repo",
+        event_id: "evt_sessions_repo",
+        message_id: "msg_sessions_repo",
+        text: "/sessions",
+      }),
+    )
+
+    expect(listed).toBeTrue()
+    expect(session_inputs).toEqual([
+      {
+        directory: "/tmp",
+        workspace: "ws_local",
+        roots: true,
+        limit: 8,
+      },
+      {
+        directory: "",
+        workspace: "ws_local",
+        roots: true,
+        limit: 8,
+      },
+    ])
+    expect(status_calls).toBe(1)
+    const text = ((ui.list[1]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).not.toContain("当前目录 / workspace /tmp (workspace=ws_local) 下暂无会话。")
+    expect(text).toContain("最近会话（共 1 条）：")
+    expect(text).toContain("[当前] [idle] ses_rebound")
+    expect(text).toContain("session: ses_rebound")
+    expect(text).toContain("目录: /tmp (workspace=ws_local)")
+  })
+
+  test("/new followed by /sessions renders same-directory remote roots regardless of workspace without marking a pending foreground current", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ensure_calls: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
+    const session_inputs: Array<{ directory?: string; workspace?: string; roots?: boolean; limit?: number }> = []
+    const remote_history: OpencodeSession[] = [
+      {
+        id: "ses_new",
+        title: "New session - 2026-05-06T13:31:05.597Z",
+        directory: "/tmp/local-new",
+        workspace_id: "ws_local_new",
+        created_at: 3,
+        updated_at: 3,
+      },
+      {
+        id: "ses_old_1",
+        title: "Greeting",
+        directory: "/tmp/local-new",
+        workspace_id: "ws_local_new",
+        created_at: 2,
+        updated_at: 2,
+      },
+      {
+        id: "ses_old_2",
+        title: "seedream 4.2 sft 飞书文档查找",
+        directory: "/tmp/local-new",
+        workspace_id: "ws_local_new",
+        created_at: 1,
+        updated_at: 1,
+      },
+      {
+        id: "ses_other_ws",
+        title: "Other workspace",
+        directory: "/tmp/local-new",
+        workspace_id: "ws_other",
+        created_at: 1,
+        updated_at: 1,
+      },
+      {
+        id: "ses_unscoped",
+        title: "Unscoped",
+        directory: "/tmp/local-new",
+        created_at: 1,
+        updated_at: 1,
+      },
+      {
+        id: "ses_other_dir",
+        title: "other dir",
+        directory: "/tmp/other",
+        workspace_id: "ws_local_new",
+        created_at: 1,
+        updated_at: 1,
+      },
+    ]
+    const oc = {
+      ...opencode(),
+      async ensure(input: { directory?: string; workspace?: string; session_id?: string }) {
+        ensure_calls.push(input)
+        return { id: "ses_new" }
+      },
+      async sessions(input: { directory?: string; workspace?: string; roots?: boolean; limit?: number }) {
+        session_inputs.push(input)
+        expect(input).toEqual({
+          directory: "/tmp/local-new",
+          workspace: undefined,
+          roots: true,
+          limit: 8,
+        })
+        return remote_history
+      },
+      async status(input: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp/local-new",
+          workspace: undefined,
+        })
+        return {
+          ses_new: { type: "idle" },
+          ses_old_1: { type: "idle" },
+          ses_old_2: { type: "busy" },
+          ses_other_ws: { type: "busy" },
+          ses_unscoped: { type: "idle" },
+          ses_other_dir: { type: "busy" },
+        }
+      },
+    } satisfies OpencodeSvc
+    const actual_route = createSessionSvc({
+      store,
+      opencode: oc,
+      directory: "/tmp/local-new",
+      workspace: "ws_local_new",
+    })
+
+    const created = await on_cmd(
+      "/new",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_new_history",
+        event_id: "evt_new_history",
+        message_id: "msg_new_history",
+        text: "/new",
+      }),
+    )
+
+    expect(created).toBeTrue()
+    expect(ensure_calls).toEqual([])
+
+    const listed = await on_cmd(
+      "/sessions",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_sessions_history",
+        event_id: "evt_sessions_history",
+        message_id: "msg_sessions_history",
+        text: "/sessions",
+      }),
+    )
+
+    expect(listed).toBeTrue()
+    expect(session_inputs).toEqual([
+      {
+        directory: "/tmp/local-new",
+        workspace: undefined,
+        roots: true,
+        limit: 8,
+      },
+    ])
+    const text = ((ui.list[1]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("最近会话（共 5 条）：")
+    expect(text).toContain("[idle] New session - 2026-05-06T13:31:05.597Z")
+    expect(text).not.toContain("[当前]")
+    expect(text).toContain("session: ses_new")
+    expect(text).toContain("session: ses_old_1")
+    expect(text).toContain("session: ses_old_2")
+    expect(text).toContain("session: ses_other_ws")
+    expect(text).toContain("session: ses_unscoped")
+    expect(text).toContain("[busy] seedream 4.2 sft 飞书文档查找")
+    expect(text).not.toContain("other dir")
+  })
+
+  test("/new followed by /sessions does not synthesize a current session when directory-first pending lookups miss same-directory history", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ensure_calls: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
+    const session_inputs: Array<{ directory?: string; workspace?: string; roots?: boolean; limit?: number }> = []
+    const oc = {
+      ...opencode(),
+      async ensure(input: { directory?: string; workspace?: string; session_id?: string }) {
+        ensure_calls.push(input)
+        return { id: "ses_new" }
+      },
+      async sessions(input: { directory?: string; workspace?: string; roots?: boolean; limit?: number }) {
+        session_inputs.push(input)
+        if (session_inputs.length === 1) {
+          expect(input).toEqual({
+            directory: "/tmp/local-new",
+            workspace: undefined,
+            roots: true,
+            limit: 8,
+          })
+          return [
+            {
+              id: "ses_other_dir_first",
+              title: "other dir first",
+              directory: "/tmp/another",
+              workspace_id: "ws_other",
+              created_at: 2,
+              updated_at: 2,
+            },
+          ] satisfies OpencodeSession[]
+        }
+        expect(input).toEqual({
+          directory: "",
+          workspace: undefined,
+          roots: true,
+          limit: 8,
+        })
+        return [
+          {
+            id: "ses_other_ws_global",
+            title: "wrong workspace elsewhere",
+            directory: "/tmp/another",
+            workspace_id: "ws_other",
+            created_at: 3,
+            updated_at: 3,
+          },
+          {
+            id: "ses_unscoped_elsewhere",
+            title: "unscoped elsewhere",
+            directory: "/tmp/another",
+            created_at: 4,
+            updated_at: 4,
+          },
+        ] satisfies OpencodeSession[]
+      },
+      async status(input: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp/local-new",
+          workspace: undefined,
+        })
+        return {
+          ses_other_dir_first: { type: "busy" },
+          ses_other_ws_global: { type: "busy" },
+          ses_unscoped_elsewhere: { type: "idle" },
+        }
+      },
+    } satisfies OpencodeSvc
+    const actual_route = createSessionSvc({
+      store,
+      opencode: oc,
+      directory: "/tmp/local-new",
+      workspace: "ws_local_new",
+    })
+
+    const created = await on_cmd(
+      "/new",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_new_miss",
+        event_id: "evt_new_miss",
+        message_id: "msg_new_miss",
+        text: "/new",
+      }),
+    )
+
+    expect(created).toBeTrue()
+    expect(ensure_calls).toEqual([])
+
+    const listed = await on_cmd(
+      "/sessions",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_sessions_miss",
+        event_id: "evt_sessions_miss",
+        message_id: "msg_sessions_miss",
+        text: "/sessions",
+      }),
+    )
+
+    expect(listed).toBeTrue()
+    expect(session_inputs).toEqual([
+      {
+        directory: "/tmp/local-new",
+        workspace: undefined,
+        roots: true,
+        limit: 8,
+      },
+      {
+        directory: "",
+        workspace: undefined,
+        roots: true,
+        limit: 8,
+      },
+    ])
+    const text = ((ui.list[1]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("当前目录：/tmp/local-new 下暂无会话。")
+    expect(text).not.toContain("[当前]")
+    expect(text).not.toContain("session: ses_new")
+    expect(text).not.toContain("wrong workspace")
+    expect(text).not.toContain("unscoped")
+  })
+
+  test("/repo away and back followed by /sessions renders all exact-scoped remote roots when remote history is present", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    await store.save_session(session({ session_id: "ses_current", directory: "/tmp/history", workspace_id: undefined }))
+    const ensure_calls: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
+    const remote_history: OpencodeSession[] = [
+      {
+        id: "ses_rebound",
+        title: "New session - 2026-05-06T13:31:05.597Z",
+        directory: "/tmp/history",
+        created_at: 3,
+        updated_at: 3,
+      },
+      {
+        id: "ses_old_1",
+        title: "Greeting",
+        directory: "/tmp/history",
+        created_at: 2,
+        updated_at: 2,
+      },
+      {
+        id: "ses_old_2",
+        title: "seedream 4.2 sft 飞书文档查找",
+        directory: "/tmp/history",
+        created_at: 1,
+        updated_at: 1,
+      },
+      {
+        id: "ses_other_dir",
+        title: "other dir",
+        directory: "/tmp/other",
+        created_at: 1,
+        updated_at: 1,
+      },
+      {
+        id: "ses_other_ws",
+        title: "wrong workspace",
+        directory: "/tmp/history",
+        workspace_id: "ws_other",
+        created_at: 1,
+        updated_at: 1,
+      },
+    ]
+    const oc = {
+      ...opencode(),
+      async ensure(input: { directory?: string; workspace?: string; session_id?: string }) {
+        ensure_calls.push(input)
+        return { id: ensure_calls.length === 1 ? "ses_other" : "ses_rebound" }
+      },
+      async sessions(input: { directory?: string; workspace?: string; roots?: boolean; limit?: number }) {
+        expect(input).toEqual({
+          directory: "/tmp/history",
+          workspace: undefined,
+          roots: true,
+          limit: 8,
+        })
+        return remote_history
+      },
+      async status(input: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp/history",
+          workspace: undefined,
+        })
+        return {
+          ses_rebound: { type: "idle" },
+          ses_old_1: { type: "idle" },
+          ses_old_2: { type: "busy" },
+          ses_other_dir: { type: "busy" },
+          ses_other_ws: { type: "idle" },
+        }
+      },
+    } satisfies OpencodeSvc
+    const actual_route = createSessionSvc({
+      store,
+      opencode: oc,
+      directory: "/tmp",
+      workspace: undefined,
+    })
+
+    const away = await on_cmd(
+      "/repo /tmp/other",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_repo_away",
+        event_id: "evt_repo_away",
+        message_id: "msg_repo_away",
+        text: "/repo /tmp/other",
+      }),
+    )
+
+    expect(away).toBeTrue()
+
+    const back = await on_cmd(
+      "/repo /tmp/history",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_repo_back",
+        event_id: "evt_repo_back",
+        message_id: "msg_repo_back",
+        text: "/repo /tmp/history",
+      }),
+    )
+
+    expect(back).toBeTrue()
+    expect(ensure_calls).toEqual([
+      { directory: "/tmp/other", workspace: undefined },
+      { directory: "/tmp/history", workspace: undefined },
+    ])
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      session_id: "ses_rebound",
+      directory: "/tmp/history",
+      workspace_id: undefined,
+    })
+
+    const listed = await on_cmd(
+      "/sessions",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_sessions_roundtrip",
+        event_id: "evt_sessions_roundtrip",
+        message_id: "msg_sessions_roundtrip",
+        text: "/sessions",
+      }),
+    )
+
+    expect(listed).toBeTrue()
+    const text = ((ui.list[2]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("最近会话（共 3 条）：")
+    expect(text).toContain("[当前] [idle] New session - 2026-05-06T13:31:05.597Z")
+    expect(text).toContain("session: ses_rebound")
+    expect(text).toContain("session: ses_old_1")
+    expect(text).toContain("session: ses_old_2")
+    expect(text).not.toContain("other dir")
+    expect(text).not.toContain("wrong workspace")
+  })
+
+  test("/new followed by /sessions retries broader roots and renders recovered same-directory history without marking pending current", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const render = createRender()
+    const ensure_calls: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
+    const session_inputs: Array<{ directory?: string; workspace?: string; roots?: boolean; limit?: number }> = []
+    const oc = {
+      ...opencode(),
+      async ensure(input: { directory?: string; workspace?: string; session_id?: string }) {
+        ensure_calls.push(input)
+        return { id: "ses_new" }
+      },
+      async sessions(input: { directory?: string; workspace?: string; roots?: boolean; limit?: number }) {
+        session_inputs.push(input)
+        if (session_inputs.length === 1) {
+          expect(input).toEqual({
+            directory: "/tmp/local-new",
+            workspace: undefined,
+            roots: true,
+            limit: 8,
+          })
+          return [
+            {
+              id: "ses_other_dir_first",
+              title: "other dir first",
+              directory: "/tmp/other",
+              workspace_id: "ws_local_new",
+              created_at: 2,
+              updated_at: 2,
+            },
+          ] satisfies OpencodeSession[]
+        }
+        expect(input).toEqual({
+          directory: "",
+          workspace: undefined,
+          roots: true,
+          limit: 8,
+        })
+        return [
+          {
+            id: "ses_new",
+            title: "New session - 2026-05-07T03:37:36.193Z",
+            directory: "/tmp/local-new",
+            workspace_id: "ws_local_new",
+            created_at: 3,
+            updated_at: 3,
+          },
+          {
+            id: "ses_old_1",
+            title: "Greeting",
+            directory: "/tmp/local-new",
+            workspace_id: "ws_other",
+            created_at: 2,
+            updated_at: 2,
+          },
+          {
+            id: "ses_other_dir",
+            title: "other dir",
+            directory: "/tmp/other",
+            workspace_id: "ws_local_new",
+            created_at: 1,
+            updated_at: 1,
+          },
+        ] satisfies OpencodeSession[]
+      },
+      async status(input: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp/local-new",
+          workspace: undefined,
+        })
+        return {
+          ses_new: { type: "idle" },
+          ses_old_1: { type: "busy" },
+          ses_other_dir_first: { type: "idle" },
+          ses_other_dir: { type: "busy" },
+        }
+      },
+    } satisfies OpencodeSvc
+    const actual_route = createSessionSvc({
+      store,
+      opencode: oc,
+      directory: "/tmp/local-new",
+      workspace: "ws_local_new",
+    })
+
+    const created = await on_cmd(
+      "/new",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_new_retry",
+        event_id: "evt_new_retry",
+        message_id: "msg_new_retry",
+        text: "/new",
+      }),
+    )
+
+    expect(created).toBeTrue()
+    expect(ensure_calls).toEqual([])
+
+    const listed = await on_cmd(
+      "/sessions",
+      cfg(),
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      render,
+      oc,
+      inbound({
+        id: "in_sessions_retry",
+        event_id: "evt_sessions_retry",
+        message_id: "msg_sessions_retry",
+        text: "/sessions",
+      }),
+    )
+
+    expect(listed).toBeTrue()
+    expect(session_inputs).toEqual([
+      {
+        directory: "/tmp/local-new",
+        workspace: undefined,
+        roots: true,
+        limit: 8,
+      },
+      {
+        directory: "",
+        workspace: undefined,
+        roots: true,
+        limit: 8,
+      },
+    ])
+    const text = ((ui.list[1]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("最近会话（共 2 条）：")
+    expect(text).toContain("[idle] New session - 2026-05-07T03:37:36.193Z")
+    expect(text).not.toContain("[当前]")
+    expect(text).toContain("session: ses_new")
+    expect(text).toContain("[busy] Greeting")
+    expect(text).toContain("session: ses_old_1")
+    expect(text).not.toContain("wrong workspace")
+    expect(text).not.toContain("other dir")
+  })
+
+  test("/new followed by the first normal message lazily creates and binds the real session", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg({
+      directory: "/tmp/local-new",
+      workspace: "ws_local_new",
+    })
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai,
+      inbound({
+        id: "in_lazy_new_1",
+        event_id: "evt_lazy_new_1",
+        message_id: "msg_lazy_new_1",
+        text: "/new",
+      }),
+    )
+
+    expect(ai.ensures).toEqual([])
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai,
+      inbound({
+        id: "in_lazy_new_2",
+        event_id: "evt_lazy_new_2",
+        message_id: "msg_lazy_new_2",
+        text: "hello",
+      }),
+    )
+
+    expect(ai.ensures).toEqual([{ directory: "/tmp/local-new", workspace: "ws_local_new" }])
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      session_id: "ses_1",
+      directory: "/tmp/local-new",
+      workspace_id: "ws_local_new",
+      state: "active",
+    })
+  })
+
+  test("/new enters pending foreground with chat default scope", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
@@ -3487,12 +4384,12 @@ describe("commands", () => {
     expect(ui.list[0]?.out).toMatchObject({
       kind: "text",
       body: {
-        text: ["已创建新会话。", "目录：/tmp/chat-default (workspace=ws_chat_default)"].join("\n"),
+        text: ["已切换到新会话，首次发送消息时创建。", "目录：/tmp/chat-default (workspace=ws_chat_default)"].join("\n"),
       },
     })
   })
 
-  test("/new keeps current running task alive in background", async () => {
+  test("/new enters pending foreground and keeps current running task alive in background", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
@@ -3513,7 +4410,7 @@ describe("commands", () => {
     expect(ui.list[0]?.out).toMatchObject({
       kind: "text",
       body: {
-        text: ["已创建新会话。", "目录：/tmp/new"].join("\n"),
+        text: ["已切换到新会话，首次发送消息时创建。", "目录：/tmp/new"].join("\n"),
       },
     })
   })

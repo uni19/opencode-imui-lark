@@ -30,7 +30,7 @@ import { cleanupDir } from "../storage/cleanup.js"
 import { createRender } from "../render/text.js"
 import { createFeishuApi } from "../feishu/api.js"
 import { createOpencodeSvc } from "../opencode/client.js"
-import { createSessionSvc } from "../gateway/session.js"
+import { createSessionSvc, is_pending_session } from "../gateway/session.js"
 import { createTaskSvc } from "../gateway/task.js"
 import { createQueue } from "../queue/bus.js"
 import { createGateway } from "../gateway/ingest.js"
@@ -118,6 +118,15 @@ function wait(status?: string) {
   return status === "waiting_permission" || status === "waiting_question" || status === "waiting_attachment"
 }
 
+function active_session_id(current?: Pick<ImSession, "session_id" | "state"> | null) {
+  if (!current || is_pending_session(current)) return
+  return current.session_id
+}
+
+function session_label(current?: Pick<ImSession, "session_id" | "state"> | null) {
+  return active_session_id(current) ?? "未创建"
+}
+
 function done(status?: string) {
   return status === "completed" || status === "failed" || status === "aborted"
 }
@@ -151,7 +160,8 @@ function help() {
     "/repo --chat 为当前聊天设置默认目录",
     "/repo --me 为当前用户设置默认目录",
     "--chat / --me 可与 --workspace 组合使用",
-    "/sessions、/skills、/agents、/models、/mcps、/commands 会按当前目录 / workspace 取数",
+    "/sessions 会按当前目录列出最近会话；当前会话已创建时会按 workspace 精确过滤",
+    "/skills、/agents、/models、/mcps、/commands 会按当前目录 / workspace 取数",
     "/workspaces 会列出当前仓库目录下可用 workspace",
     "未命中的 slash 会按当前目录 / workspace 尝试透传到 OpenCode 执行，例如 /init",
     "示例：/repo /path/to/opencode",
@@ -701,7 +711,7 @@ async function foreground(store: Store, row: Task | null | undefined) {
     chat_id: inbound.chat_id,
     thread_id: inbound.thread_id,
   })
-  return current?.session_id === row.session_id
+  return active_session_id(current) === row.session_id
 }
 
 function visible(status?: Task["status"]) {
@@ -1174,6 +1184,13 @@ function exact_session_scope(
   )
 }
 
+function directory_session_scope(
+  list: Awaited<ReturnType<OpencodeSvc["sessions"]>>,
+  input: { directory?: string },
+) {
+  return list.filter((item) => !input.directory || item.directory === input.directory)
+}
+
 function scope(
   current: Awaited<ReturnType<Store["get_session"]>>,
   pref: Awaited<ReturnType<typeof prefs>>,
@@ -1194,8 +1211,11 @@ function sessions(
   dir?: string,
   workspace?: string,
   current?: string,
+  pending = false,
 ) {
-  if (list.length === 0) return `当前目录 / workspace ${repo(dir, workspace)} 下暂无会话。`
+  if (list.length === 0) {
+    return pending ? `当前目录：${dir ?? "未绑定"} 下暂无会话。` : `当前目录 / workspace ${repo(dir, workspace)} 下暂无会话。`
+  }
   return [
     `最近会话（共 ${list.length} 条）：`,
     ...list.map((item, i) =>
@@ -2691,7 +2711,8 @@ export async function on_cmd(
     chat_id: inbound.chat_id,
     thread_id: inbound.thread_id,
   })
-  let last = current ? await store.get_last_task(current.session_id) : null
+  const current_session = active_session_id(current)
+  let last = current_session ? await store.get_last_task(current_session) : null
   const pref = await prefs(store, inbound)
   const base = scope(current, pref, conf)
   const syncd =
@@ -2733,7 +2754,7 @@ export async function on_cmd(
           kind: "text",
           body: {
             text: [
-              `当前会话：${current?.session_id ?? "未创建"}`,
+              `当前会话：${session_label(current)}`,
               `目录：${repo(current?.directory, current?.workspace_id)}`,
               `模型：${model(current?.model ?? conf.opencode.model)}`,
               "使用 /session <session_id> 切换当前会话。",
@@ -2756,7 +2777,7 @@ export async function on_cmd(
       return true
     }
 
-    if (current?.session_id === next.id) {
+    if (active_session_id(current) === next.id) {
       await feishu.reply({
         msg_id: inbound.message_id,
         out: {
@@ -2792,17 +2813,53 @@ export async function on_cmd(
   }
 
   if (cmd.name === "sessions") {
+    const pending = is_pending_session(current)
+    const list_scope = pending
+      ? {
+          directory: base.directory,
+          workspace: undefined,
+        }
+      : base
     const [raw, status, tasks] = await Promise.all([
       opencode.sessions({
-        directory: base.directory,
-        workspace: base.workspace,
+        directory: list_scope.directory,
+        workspace: list_scope.workspace,
         roots: true,
         limit: 8,
       }),
-      opencode.status(base),
+      opencode.status(list_scope),
       store.list_tasks(),
     ])
-    const list = exact_session_scope(raw, base)
+    const scoped = pending ? directory_session_scope(raw, { directory: list_scope.directory }) : exact_session_scope(raw, list_scope)
+    const recovered = scoped.length > 0
+      ? scoped
+      : (pending ? directory_session_scope : exact_session_scope)(
+          await opencode.sessions({
+            directory: "",
+            workspace: list_scope.workspace,
+            roots: true,
+            limit: 8,
+          }),
+          pending ? { directory: list_scope.directory } : list_scope,
+        )
+    const current_id = active_session_id(current)
+    const fallback =
+      recovered.length === 0 && current && current_id
+        ? exact_session_scope(
+            [
+              {
+                id: current_id,
+                title: current_id,
+                directory: current.directory ?? "",
+                workspace_id: current.workspace_id,
+                created_at: current.created_at,
+                updated_at: current.updated_at,
+              },
+            ],
+            base,
+          )[0]
+        : undefined
+    const list = recovered.length > 0 || !fallback ? recovered : [fallback]
     const local = [...latest(tasks).values()].reduce((map, row) => {
       map[row.session_id] = row.status
       return map
@@ -2812,7 +2869,7 @@ export async function on_cmd(
       out: {
         kind: "text",
         body: {
-          text: sessions(list, status, local, base.directory, base.workspace, current?.session_id),
+          text: sessions(list, status, local, base.directory, base.workspace, current_id, pending),
         },
       },
     })
@@ -2897,7 +2954,7 @@ export async function on_cmd(
         out: {
           kind: "text",
           body: {
-            text: [`当前模型：${model(current?.model ?? conf.opencode.model)}`, `默认模型：${model(conf.opencode.model)}`, current?.session_id ? `session: ${current.session_id}` : "session: 未创建", "使用 /model <provider>/<model_id> 切换当前模型，或 /model reset 恢复默认。"].join("\n"),
+            text: [`当前模型：${model(current?.model ?? conf.opencode.model)}`, `默认模型：${model(conf.opencode.model)}`, `session: ${session_label(current)}`, "使用 /model <provider>/<model_id> 切换当前模型，或 /model reset 恢复默认。"].join("\n"),
           },
         },
       })
@@ -2941,7 +2998,7 @@ export async function on_cmd(
         out: {
           kind: "text",
           body: {
-            text: [`已恢复默认模型。`, `当前模型：${model(conf.opencode.model)}`, `session: ${item.session_id}`].join("\n"),
+            text: [`已恢复默认模型。`, `当前模型：${model(conf.opencode.model)}`, `session: ${session_label(item)}`].join("\n"),
           },
         },
       })
@@ -2987,7 +3044,7 @@ export async function on_cmd(
       out: {
         kind: "text",
         body: {
-          text: [`已切换当前模型。`, `当前模型：${pid}/${mid}`, `session: ${item.session_id}`].join("\n"),
+          text: [`已切换当前模型。`, `当前模型：${pid}/${mid}`, `session: ${session_label(item)}`].join("\n"),
         },
       },
     })
@@ -3078,8 +3135,19 @@ export async function on_cmd(
       })
       return true
     }
+    const session_id = active_session_id(current)
+    if (!session_id) {
+      await feishu.reply({
+        msg_id: inbound.message_id,
+        out: {
+          kind: "text",
+          body: { text: "当前没有可取消的执行。" },
+        },
+      })
+      return true
+    }
     await opencode.abort({
-      session_id: current.session_id,
+      session_id,
       directory: current.directory,
       workspace: current.workspace_id,
     })
@@ -3108,7 +3176,7 @@ export async function on_cmd(
       out: {
         kind: "text",
         body: {
-          text: [`已创建新会话。`, `目录：${repo(next.directory, next.workspace_id)}`].join("\n"),
+          text: [`已切换到新会话，首次发送消息时创建。`, `目录：${repo(next.directory, next.workspace_id)}`].join("\n"),
         },
       },
     })
@@ -3234,6 +3302,7 @@ export async function on_cmd(
       directory: cmd.arg,
       ...(cmd.workspace_present || (cmd.arg !== undefined && cmd.arg !== item.directory) ? { workspace_id } : {}),
     })
+    const changed_session = active_session_id(next) && active_session_id(item) && next?.session_id !== item.session_id
     await feishu.reply({
       msg_id: inbound.message_id,
       out: {
@@ -3241,7 +3310,7 @@ export async function on_cmd(
         body: {
           text: [
             `已绑定：${repo(next?.directory ?? cmd.arg ?? item.directory, next ? next.workspace_id : workspace_id)}`,
-            next && next.session_id !== item.session_id ? "已切换到新会话。" : undefined,
+            changed_session ? "已切换到新会话。" : undefined,
           ]
             .filter(Boolean)
             .join("\n"),
@@ -3287,15 +3356,16 @@ export async function on_cmd(
     }
 
     let item =
-      current ??
-      (await route.resolve({
-        tenant_id: inbound.tenant_id,
-        chat_id: inbound.chat_id,
-        chat_type: inbound.chat_type,
-        thread_id: inbound.thread_id,
-        root_message_id: inbound.root_message_id,
-        user_id: inbound.user_id,
-      }))
+      (current && active_session_id(current))
+        ? current
+        : await route.resolve({
+            tenant_id: inbound.tenant_id,
+            chat_id: inbound.chat_id,
+            chat_type: inbound.chat_type,
+            thread_id: inbound.thread_id,
+            root_message_id: inbound.root_message_id,
+            user_id: inbound.user_id,
+          })
     const row = last && active(last.status) && syncd === "resumable"
       ? await rebind_task(store, task, last, item, inbound)
       : await task.add({
@@ -3630,7 +3700,8 @@ export async function on_msg(
     chat_id: inbound.chat_id,
     thread_id: inbound.thread_id,
   })
-  let last = current ? await store.get_last_task(current.session_id) : null
+  const current_session = active_session_id(current)
+  let last = current_session ? await store.get_last_task(current_session) : null
   const pend = current && last?.status === "waiting_attachment" ? await store.get_task_pending(last.id) : null
   if (last?.status === "waiting_attachment" && !pend) {
     await task.fail({
@@ -3655,14 +3726,16 @@ export async function on_msg(
     return
   }
   if (await on_cmd(val, conf, route, task, store, feishu, render, opencode, inbound)) return
-  let item = await route.resolve({
-    tenant_id: inbound.tenant_id,
-    chat_id: inbound.chat_id,
-    chat_type: inbound.chat_type,
-    thread_id: inbound.thread_id,
-    root_message_id: inbound.root_message_id,
-    user_id: inbound.user_id,
-  })
+  let item = (current && active_session_id(current))
+    ? current
+    : await route.resolve({
+      tenant_id: inbound.tenant_id,
+      chat_id: inbound.chat_id,
+      chat_type: inbound.chat_type,
+      thread_id: inbound.thread_id,
+      root_message_id: inbound.root_message_id,
+      user_id: inbound.user_id,
+    })
   let prev = current ? last : await store.get_last_task(item.session_id)
   const front = await next_waiting_request(store, item.session_id)
   if (front) prev = front
