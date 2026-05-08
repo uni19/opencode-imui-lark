@@ -90,9 +90,11 @@ function feishu() {
 function opencode() {
   const prompts: Array<Parameters<OpencodeSvc["prompt"]>[0]> = []
   const aborts: Array<Parameters<OpencodeSvc["abort"]>[0]> = []
+  const ensures: Array<Parameters<OpencodeSvc["ensure"]>[0]> = []
   let seq = 0
   const svc: OpencodeSvc = {
-    async ensure() {
+    async ensure(input) {
+      ensures.push(input)
       seq += 1
       return { id: `ses_${seq}` }
     },
@@ -149,6 +151,7 @@ function opencode() {
     svc,
     prompts,
     aborts,
+    ensures,
   }
 }
 
@@ -1030,6 +1033,7 @@ describe("message flow", () => {
     expect(original.status).toBe("waiting_attachment")
     expect(await store.get_task_pending(original.id)).not.toBeNull()
     expect(ai.aborts).toHaveLength(0)
+    expect(ai.ensures).toHaveLength(1)
     expect(
       await store.get_session({
         tenant_id: "tenant",
@@ -1037,15 +1041,16 @@ describe("message flow", () => {
         thread_id: undefined,
       }),
     ).toMatchObject({
-      session_id: "ses_2",
+      session_id: expect.stringMatching(/^pending_new:/),
       directory: "/tmp",
+      state: "pending_new",
     })
     expect(ui.list[ui.list.length - 1]).toMatchObject({
       kind: "reply",
       out: {
         kind: "text",
         body: {
-          text: "已创建新会话。\n目录：/tmp",
+          text: "已切换到新会话，首次发送消息时创建。\n目录：/tmp",
         },
       },
     })
@@ -1088,6 +1093,43 @@ describe("message flow", () => {
           ]),
         },
       },
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_new_4", {
+        text: "/new",
+      }),
+    )
+
+    expect(ai.ensures).toHaveLength(1)
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_new_5", {
+        text: "请分析这张图",
+      }),
+    )
+
+    expect(ai.ensures).toHaveLength(2)
+    expect(ai.prompts[ai.prompts.length - 1]).toMatchObject({
+      session_id: "ses_2",
+    })
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      session_id: "ses_2",
+      state: "active",
     })
   })
 

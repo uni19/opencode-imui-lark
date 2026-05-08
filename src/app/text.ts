@@ -1,4 +1,4 @@
-import type { AppCfg, ConnState, OpencodeModel, OpencodeResult, RepoPref, Task } from "../contracts.js"
+import type { AppCfg, ConnState, ImSession, OpencodeModel, OpencodeResult, RepoPref, Task } from "../contracts.js"
 
 export type RecoverMode = "boot" | "message" | "opencode"
 
@@ -9,7 +9,7 @@ type Prefs = {
 
 type StatusInput = {
   row?: Task | null
-  current?: { session_id: string; directory?: string; workspace_id?: string; model?: OpencodeModel } | null
+  current?: Pick<ImSession, "session_id" | "directory" | "workspace_id" | "model" | "state"> | null
   pref: Prefs
   conf: AppCfg
   syncd?: "busy" | "resumable" | "settled" | "unknown"
@@ -124,10 +124,12 @@ function conn(item?: ConnState | null) {
 
 function next(
   row?: Task | null,
+  current?: StatusInput["current"],
   syncd?: "busy" | "resumable" | "settled" | "unknown",
   message?: ConnState | null,
   opencode?: ConnState | null,
 ) {
+  if (current?.state === "pending_new") return "发送第一条非命令消息时创建会话。"
   if (!row || done(row.status)) return "可直接发送下一条消息。"
   if (row.status === "waiting_permission") return "请回复 1/2/3；如需更正本次操作，也可直接发送文本。"
   if (row.status === "waiting_question") return "可直接回复序号；若问题允许自由回答，也可发送文本。"
@@ -143,6 +145,11 @@ function next(
   }
   if (syncd === "unknown") return "暂时无法确认远端状态，可稍后重试 /status，或发送 /abort 终止。"
   return "可稍后再发 /status 查看，或发送 /abort 终止当前执行。"
+}
+
+function current_session(current?: StatusInput["current"]) {
+  if (!current || current.state === "pending_new") return "未创建"
+  return current.session_id
 }
 
 export function stuck(status?: string) {
@@ -197,9 +204,9 @@ function status_lines(input: StatusInput) {
     `OpenCode 连接：${conn(input.opencode)}`,
     input.row ? `最近更新：${time(input.row.updated_at)}` : undefined,
     view(input.row) ? `最近进展：${view(input.row)}` : undefined,
-    `下一步：${next(input.row, input.syncd, input.message, input.opencode)}`,
+    `下一步：${next(input.row, input.current, input.syncd, input.message, input.opencode)}`,
     input.syncd === "unknown" && input.row && active(input.row.status) ? "状态探测：暂时无法确认远端状态" : undefined,
-    `session: ${input.current?.session_id ?? "未创建"}`,
+    `session: ${current_session(input.current)}`,
   ]
     .filter((item): item is string => !!item)
 }
