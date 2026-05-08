@@ -5,7 +5,7 @@ export const LOCAL_COMMANDS = [
   { name: "/new", description: "新建会话" },
   { name: "/session", description: "查看或切换当前会话" },
   { name: "/repo", description: "查看或绑定目录 / workspace" },
-  { name: "/sessions", description: "查看当前目录 / workspace 下最近会话" },
+  { name: "/sessions", description: "查看当前目录下最近会话（已创建会话按 workspace 精确过滤）" },
   { name: "/workspaces", description: "查看当前目录下可用 workspace" },
   { name: "/model", description: "查看或切换当前模型" },
   { name: "/skills", description: "查看当前目录 / workspace 下可用技能" },

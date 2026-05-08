@@ -90,7 +90,7 @@ describe("release check", () => {
           "- `/new`: 新建会话",
           "- `/session`: 查看或切换当前会话",
           "- `/repo`: 查看或绑定目录 / workspace",
-          "- `/sessions`: 查看当前目录 / workspace 下最近会话",
+          "- `/sessions`: 查看当前目录下最近会话（已创建会话按 workspace 精确过滤）",
           "- `/workspaces`: 查看当前目录下可用 workspace",
           "- `/model`: 查看或切换当前模型",
           "- `/skills`: 查看当前目录 / workspace 下可用技能",
