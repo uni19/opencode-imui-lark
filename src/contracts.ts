@@ -24,13 +24,14 @@ export type PromptPart =
 export type Inbound = {
   id: string
   platform: "feishu"
-  kind: "message"
+  kind: "message" | "card_action"
   event_id: string
   tenant_id: string
   chat_id: string
   chat_type?: ChatType
   thread_id?: string
   user_id: string
+  message_id?: string
   raw: unknown
   created_at: number
 }
@@ -47,7 +48,21 @@ export type InboundMessage = Inbound & {
   mention_names?: string[]
 }
 
-export type InboundEvent = InboundMessage
+export type InboundCardAction =
+  | (Inbound & {
+      kind: "card_action"
+      action: "approval"
+      req: string
+      reply: "once" | "always" | "reject"
+    })
+  | (Inbound & {
+      kind: "card_action"
+      action: "question"
+      req: string
+      answers: string[][]
+    })
+
+export type InboundEvent = InboundMessage | InboundCardAction
 
 export type ImSessionState = "active" | "pending_new" | "archived" | "error"
 
@@ -513,5 +528,5 @@ export type Store = {
 }
 
 export type Gateway = {
-  on_msg(input: InboundMessage): Promise<void>
+  on_msg(input: InboundEvent): Promise<void>
 }

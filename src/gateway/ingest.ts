@@ -1,4 +1,4 @@
-import type { Gateway, InboundMessage, Queue, Store } from "../contracts.js"
+import type { Gateway, InboundEvent, Queue, Store } from "../contracts.js"
 
 type Input = {
   store: Store
@@ -13,7 +13,7 @@ async function dedup(store: Store, key: string) {
 
 export function createGateway(input: Input): Gateway {
   return {
-    async on_msg(msg: InboundMessage) {
+    async on_msg(msg: InboundEvent) {
       await input.store.save_inbound(msg)
       if (await dedup(input.store, msg.event_id)) return
       await input.queue.push({
