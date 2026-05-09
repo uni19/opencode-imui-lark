@@ -241,7 +241,7 @@ function approval(body: CardData) {
     elements: [
       markdown(`**工具:** ${body.tool ?? "tool"}`),
       ...(body.detail ? [markdown(body.detail)] : []),
-      markdown(`请直接回复序号继续；如需更正本次操作，也可以直接发送文本。\n${numbered(list)}`),
+      markdown(`可直接点击下方按钮继续；也可回复 1/2/3；如需更正本次操作，也可以直接发送文本。\n${numbered(list)}`),
       button({
         text: list[0],
         name: "approval_once",
@@ -290,8 +290,8 @@ function question(body: CardData) {
     list.length === 0
       ? "请直接发送文字继续。"
       : body.custom
-        ? `请优先回复序号继续；如需多选，可回复 1,2；如需自定义回答，也可以直接发送文字。\n${numbered(list)}`
-        : `请直接回复序号继续；如需多选，可回复 1,2。\n${numbered(list)}`
+        ? `可直接在卡片中选择后提交；也可回复序号继续；如需多选，可回复 1,2；如需自定义回答，也可以直接发送文字。\n${numbered(list)}`
+        : `可直接在卡片中选择后提交；也可回复序号继续；如需多选，可回复 1,2。\n${numbered(list)}`
 
   return payload({
     config: {

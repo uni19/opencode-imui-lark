@@ -131,8 +131,14 @@ function next(
 ) {
   if (current?.state === "pending_new") return "发送第一条非命令消息时创建会话。"
   if (!row || done(row.status)) return "可直接发送下一条消息。"
-  if (row.status === "waiting_permission") return "请回复 1/2/3；如需更正本次操作，也可直接发送文本。"
-  if (row.status === "waiting_question") return "可直接回复序号；若问题允许自由回答，也可发送文本。"
+  if (row.status === "waiting_permission") return "可点击卡片按钮，或回复 1/2/3；如需更正本次操作，也可直接发送文本。"
+  if (row.status === "waiting_question") {
+    const meta = qmeta(row.note)
+    if (!meta || meta.opts.length === 0) return "请直接发送文字回答继续。"
+    return meta.custom
+      ? "可在卡片中选择并提交，也可直接回复序号；如需多选，可回复 1,2；若需自定义回答，也可发送文本。"
+      : "可在卡片中选择并提交，也可直接回复序号；如需多选，可回复 1,2。"
+  }
   if (row.status === "waiting_attachment") return "请再发一句你希望我做什么。"
   if (opencode?.status === "reconnecting" || opencode?.status === "error") {
     return "当前正在等待 OpenCode 连接恢复，可稍后重试 /status，或发送 /abort 终止。"
@@ -332,7 +338,9 @@ function advice(err: unknown) {
     base.includes("发送 /abort") ||
     base.includes("请再发一句你希望我做什么") ||
     base.includes("请直接发送文本内容") ||
-    base.includes("请直接回复序号")
+    base.includes("请直接回复序号") ||
+    base.includes("可在卡片中选择并提交") ||
+    base.includes("可点击卡片按钮")
   ) {
     return
   }

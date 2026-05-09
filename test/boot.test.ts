@@ -563,6 +563,63 @@ describe("boot helpers", () => {
     ).toContain("下一步：当前正在等待 OpenCode 连接恢复，可稍后重试 /status，或发送 /abort 终止。")
   })
 
+  test("renders card-first next-step hints while preserving text fallback", () => {
+    const current = {
+      session_id: "ses_1",
+      directory: "/tmp/work",
+      workspace_id: "ws_1",
+      state: "active" as const,
+    }
+
+    expect(
+      status_text({
+        row: row({
+          status: "waiting_permission",
+          note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/tmp" }))}`,
+        }),
+        current,
+        pref: { chat: null, user: null },
+        conf: cfg(),
+      }),
+    ).toContain("下一步：可点击卡片按钮，或回复 1/2/3；如需更正本次操作，也可直接发送文本。")
+
+    expect(
+      status_text({
+        row: row({
+          status: "waiting_question",
+          note: `question:0:${encodeURIComponent("请选择")}:${encodeURIComponent("A")}|${encodeURIComponent("B")}`,
+        }),
+        current,
+        pref: { chat: null, user: null },
+        conf: cfg(),
+      }),
+    ).toContain("下一步：可在卡片中选择并提交，也可直接回复序号；如需多选，可回复 1,2。")
+
+    expect(
+      status_text({
+        row: row({
+          status: "waiting_question",
+          note: `question:1:${encodeURIComponent("请选择")}:${encodeURIComponent("A")}|${encodeURIComponent("B")}`,
+        }),
+        current,
+        pref: { chat: null, user: null },
+        conf: cfg(),
+      }),
+    ).toContain("下一步：可在卡片中选择并提交，也可直接回复序号；如需多选，可回复 1,2；若需自定义回答，也可发送文本。")
+
+    expect(
+      status_text({
+        row: row({
+          status: "waiting_question",
+          note: `question:1:${encodeURIComponent("请补充说明")}`,
+        }),
+        current,
+        pref: { chat: null, user: null },
+        conf: cfg(),
+      }),
+    ).toContain("下一步：请直接发送文字回答继续。")
+  })
+
   test("renders terminal note for completed status", () => {
     expect(
       status_text({
@@ -5033,6 +5090,48 @@ describe("commands", () => {
     })
   })
 
+  test("waiting_question without a valid choice reminds about card submit or numbered reply", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_question",
+        req_type: "question",
+        req: "req_q_invalid",
+        note: `question:0:${encodeURIComponent("请选择")}:${encodeURIComponent("A")}|${encodeURIComponent("B")}`,
+      }),
+    )
+
+    await on_msg(
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      opencode(),
+      inbound({
+        id: "in_q_invalid",
+        event_id: "evt_q_invalid",
+        message_id: "msg_q_invalid",
+        text: "不是序号",
+      }),
+    )
+
+    expect((await store.get_task("tsk_1"))?.status).toBe("waiting_question")
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        title: "OpenCode",
+        template: "blue",
+        text: "当前这一步可在卡片中选择后提交；也可直接回复序号，例如 1；如需多选，可回复 1,2。",
+      },
+    })
+  })
+
   test("waiting_permission treats direct text as correction and keeps task running", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
@@ -5099,6 +5198,62 @@ describe("commands", () => {
       },
     })
   })
+  test("waiting_permission with an invalid reply treats it as correction text", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_permission",
+        req_type: "permission",
+        req: "req_perm_invalid",
+        note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/usr" }))}`,
+      }),
+    )
+    const calls: Array<{ req: string; reply: "once" | "always" | "reject"; message?: string }> = []
+    const oc = {
+      ...opencode(),
+      async allow(input) {
+        calls.push({ req: input.req, reply: input.reply, message: input.message })
+      },
+    } satisfies OpencodeSvc
+
+    await on_msg(
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({
+        id: "in_perm_invalid",
+        event_id: "evt_perm_invalid",
+        message_id: "msg_perm_invalid",
+        text: "点错了，应该看 /tmp",
+      }),
+    )
+
+    expect(calls).toEqual([
+      {
+        req: "req_perm_invalid",
+        reply: "reject",
+        message: "点错了，应该看 /tmp",
+      },
+    ])
+    expect((await store.get_task("tsk_1"))?.status).toBe("running")
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        title: "OpenCode",
+        template: "blue",
+        text: "已收到你的更正说明，正在继续执行…",
+      },
+    })
+  })
+
 })
 
 // 第二张权限卡如果还没有 outbound_id，必须新发消息，不能错误 patch 到第一张卡上。

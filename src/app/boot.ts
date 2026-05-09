@@ -3988,7 +3988,7 @@ export async function on_msg(
       await feishu.reply({
         msg_id: inbound.message_id,
         out: render.progress({
-          text: "当前这一步请直接回复序号，例如 1；如需多选，可回复 1,2。",
+          text: "当前这一步可在卡片中选择后提交；也可直接回复序号，例如 1；如需多选，可回复 1,2。",
         }),
       })
       return
@@ -4069,7 +4069,7 @@ export async function on_msg(
       await feishu.reply({
         msg_id: inbound.message_id,
         out: render.progress({
-          text: "当前在等待权限审批，请回复 1、2、3；如果你想更正本次操作，也可以直接发送文本。",
+          text: "当前在等待权限审批，可点击卡片按钮，或回复 1、2、3；如果你想更正本次操作，也可以直接发送文本。",
         }),
       })
       return
