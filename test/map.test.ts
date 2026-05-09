@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { parseMessage } from "../src/feishu/map.ts"
+import { parseCardAction, parseMessage } from "../src/feishu/map.ts"
 
 describe("parseMessage", () => {
   test("parses rich post text, images, files, and mentions", () => {
@@ -133,5 +133,217 @@ describe("parseMessage", () => {
       { kind: "image", key: "img_2", name: "image-img_2.png" },
       { kind: "file", key: "file_1", name: "spec.pdf" },
     ])
+  })
+})
+
+describe("parseCardAction", () => {
+  test("parses approval callback into normalized inbound action", () => {
+    const event = parseCardAction({
+      event_id: "evt_card_1",
+      tenant_key: "tenant",
+      token: "tok_1",
+      open_message_id: "om_1",
+      operator: {
+        operator_id: {
+          open_id: "ou_user",
+        },
+      },
+      context: {
+        open_chat_id: "oc_1",
+        open_message_id: "om_1",
+      },
+      action: {
+        value: {
+          action: "approval",
+          req: "req_1",
+          reply: "always",
+        },
+      },
+    })
+
+    expect(event).toMatchObject({
+      kind: "card_action",
+      action: "approval",
+      event_id: "evt_card_1",
+      tenant_id: "tenant",
+      chat_id: "oc_1",
+      user_id: "ou_user",
+      message_id: "om_1",
+      req: "req_1",
+      reply: "always",
+    })
+  })
+
+  test("parses question callback answers from action values", () => {
+    const event = parseCardAction({
+      tenant_key: "tenant",
+      token: "tok_2",
+      context: {
+        open_chat_id: "oc_2",
+        open_message_id: "om_2",
+      },
+      operator: {
+        operator_id: {
+          open_id: "ou_user",
+        },
+      },
+      action: {
+        value: {
+          action: "question",
+          req: "req_2",
+          answers: [["A", "B"]],
+        },
+      },
+    })
+
+    expect(event).toMatchObject({
+      kind: "card_action",
+      action: "question",
+      chat_id: "oc_2",
+      user_id: "ou_user",
+      message_id: "om_2",
+      req: "req_2",
+      answers: [["A", "B"]],
+    })
+    expect(event?.event_id).toContain("tok_2")
+    expect(event?.event_id).toContain("req_2")
+  })
+
+  test("parses question callback answers from submitted form values", () => {
+    const event = parseCardAction({
+      tenant_key: "tenant",
+      token: "tok_2_form",
+      context: {
+        open_chat_id: "oc_2_form",
+        open_message_id: "om_2_form",
+      },
+      operator: {
+        operator_id: {
+          open_id: "ou_user",
+        },
+      },
+      action: {
+        value: {
+          kind: "question",
+          req: "req_2_form",
+          choices_field: "choices",
+        },
+        form_value: {
+          req: "req_should_not_become_answer",
+          kind: "question",
+          choices: ["A", "B"],
+        },
+      },
+    })
+
+    expect(event).toMatchObject({
+      kind: "card_action",
+      action: "question",
+      chat_id: "oc_2_form",
+      user_id: "ou_user",
+      message_id: "om_2_form",
+      req: "req_2_form",
+      answers: [["A", "B"]],
+    })
+  })
+
+  test("prefers structured answers over fallback question fields", () => {
+    const event = parseCardAction({
+      tenant_key: "tenant",
+      token: "tok_2_priority",
+      context: {
+        open_chat_id: "oc_2_priority",
+        open_message_id: "om_2_priority",
+      },
+      operator: {
+        operator_id: {
+          open_id: "ou_user",
+        },
+      },
+      action: {
+        value: {
+          kind: "question",
+          req: "req_2_priority",
+          answers: [["A"]],
+          text: "free text should lose",
+          option: "B",
+        },
+        form_value: {
+          choices: ["C", "D"],
+        },
+      },
+    })
+
+    expect(event).toMatchObject({
+      kind: "card_action",
+      action: "question",
+      chat_id: "oc_2_priority",
+      user_id: "ou_user",
+      message_id: "om_2_priority",
+      req: "req_2_priority",
+      answers: [["A"]],
+    })
+  })
+
+  test("parses official header-event envelope shape", () => {
+    const event = parseCardAction({
+      schema: "2.0",
+      header: {
+        event_id: "evt_card_3",
+        tenant_key: "tenant_hdr",
+        token: "verify_token",
+        event_type: "card.action.trigger",
+      },
+      event: {
+        token: "card_token",
+        operator: {
+          open_id: "ou_user",
+        },
+        context: {
+          open_chat_id: "oc_3",
+          open_message_id: "om_3",
+        },
+        action: {
+          tag: "button",
+          value: {
+            action: "approval",
+            req: "req_3",
+            reply: "reject",
+          },
+        },
+      },
+    })
+
+    expect(event).toMatchObject({
+      kind: "card_action",
+      action: "approval",
+      event_id: "evt_card_3",
+      tenant_id: "tenant_hdr",
+      chat_id: "oc_3",
+      message_id: "om_3",
+      user_id: "ou_user",
+      req: "req_3",
+      reply: "reject",
+    })
+  })
+
+  test("returns null when callback lacks actionable req or payload", () => {
+    expect(
+      parseCardAction({
+        context: {
+          open_chat_id: "oc_3",
+        },
+        operator: {
+          operator_id: {
+            open_id: "ou_user",
+          },
+        },
+        action: {
+          value: {
+            action: "approval",
+          },
+        },
+      }),
+    ).toBeNull()
   })
 })

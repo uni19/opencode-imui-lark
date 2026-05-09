@@ -7,6 +7,7 @@ import type {
   ConnState,
   FeishuApi,
   ImSession,
+  InboundCardAction,
   InboundMessage,
   OpencodeAgent,
   OpencodeCommand,
@@ -562,6 +563,29 @@ async function waiting_requests(store: Store, session_id: string) {
 // 同一 session 里，永远只允许队头 waiting request 对外可见。
 async function next_waiting_request(store: Store, session_id: string) {
   return (await waiting_requests(store, session_id))[0] ?? null
+}
+
+async function visible_wait_req(store: Store, session_id: string) {
+  const row = await live_task(store, session_id)
+  if (row) {
+    const item = await head_wait(store, row)
+    if (item?.req_key) {
+      return {
+        row,
+        req: item.req_key,
+      }
+    }
+  }
+  const list = await store.list_tasks({
+    session_id,
+    status: ["waiting_permission", "waiting_question"],
+  })
+  const current = list[0]
+  if (!current?.req) return null
+  return {
+    row: current,
+    req: current.req,
+  }
 }
 
 async function visible_task(store: Store, session_id: string) {
@@ -3684,6 +3708,112 @@ export async function dispatch_event(
   await on_event(store, task, feishu, render, opencode, item)
 }
 
+export async function on_card_action(
+  task: TaskSvc,
+  store: Store,
+  feishu: FeishuApi,
+  render: Render,
+  opencode: OpencodeSvc,
+  inbound: InboundCardAction,
+) {
+  const row = await store.get_task_by_req(inbound.req)
+  if (!row || done(row.status)) return false
+  const visible = await visible_wait_req(store, row.session_id)
+  if (!visible || visible.row.id !== row.id || visible.req !== inbound.req) return false
+
+  const item = (await store.get_task(row.id)) ?? row
+  if (!(await foreground(store, item))) return false
+  const to = await dest(store, item, item.session_id)
+  if (!to) return false
+
+  if (inbound.action === "question") {
+    if (inbound.answers.length === 0) return false
+    const current =
+      item.status === "waiting_question" && item.req === inbound.req
+        ? item
+        : await sync_wait_head(store, item, await head_wait(store, item))
+    if (current.status !== "waiting_question" || current.req !== inbound.req) return false
+    if (inbound.message_id && current.outbound_id && inbound.message_id !== current.outbound_id) return false
+    await task.run(current.id)
+    await resolve_wait(store, current, current.req)
+    await publish(
+      store,
+      task as ReturnType<typeof createTaskSvc>,
+      feishu as ReturnType<typeof createFeishuApi>,
+      current.session_id,
+      to.chat_id,
+      render.progress({
+        text: "已提交补充信息",
+      }),
+      undefined,
+      current,
+      progress_meta,
+    )
+    await opencode.answer({
+      req: current.req,
+      answers: inbound.answers,
+      directory: to.directory,
+      workspace: to.workspace,
+    })
+    await flush_next_request(
+      store,
+      task as ReturnType<typeof createTaskSvc>,
+      feishu as ReturnType<typeof createFeishuApi>,
+      render as ReturnType<typeof createRender>,
+      current.session_id,
+      to.chat_id,
+    )
+    return true
+  }
+
+  const current =
+    item.status === "waiting_permission" && item.req === inbound.req
+      ? item
+      : await sync_wait_head(store, item, await head_wait(store, item))
+  if (current.status !== "waiting_permission" || current.req !== inbound.req) return false
+  if (inbound.message_id && current.outbound_id && inbound.message_id !== current.outbound_id) return false
+  if (inbound.reply === "reject") {
+    await resolve_wait(store, current, current.req)
+    await task.run(current.id)
+  } else {
+    await task.run(current.id)
+    await resolve_wait(store, current, current.req)
+  }
+  await publish(
+    store,
+    task as ReturnType<typeof createTaskSvc>,
+    feishu as ReturnType<typeof createFeishuApi>,
+    current.session_id,
+    to.chat_id,
+    render.progress({
+      text:
+        inbound.reply === "always"
+          ? "已始终允许，正在继续执行…"
+          : inbound.reply === "reject"
+            ? "已拒绝当前权限请求。"
+            : "已允许一次，正在继续执行…",
+    }),
+    undefined,
+    current,
+    progress_meta,
+  )
+  await opencode.allow({
+    req: current.req,
+    reply: inbound.reply,
+    directory: to.directory,
+    workspace: to.workspace,
+  })
+  await flush_next_request(
+    store,
+    task as ReturnType<typeof createTaskSvc>,
+    feishu as ReturnType<typeof createFeishuApi>,
+    render as ReturnType<typeof createRender>,
+    current.session_id,
+    to.chat_id,
+  )
+  return true
+}
+
 export async function on_msg(
   conf: AppCfg,
   route: SessionSvc,
@@ -4151,13 +4281,18 @@ export function createApp(conf = cfg()): App {
     store,
     async (job) => {
       const inbound = await store.get_inbound(job.id)
-      if (!inbound || inbound.kind !== "message") return
+      if (!inbound) return
+      if (inbound.kind === "card_action") {
+        await on_card_action(task, store, feishu, render, opencode, inbound)
+        return
+      }
       if (await store.get_task_by_inbound(job.id)) return
       if (!(await allow(store, inbound, feishu, conf.feishu.bot_id))) return
       await on_msg(conf, route, task, store, feishu, render, opencode, inbound)
     },
     async (job, err) => {
       const inbound = await store.get_inbound(job.id)
+      if (inbound?.kind === "card_action") return
       const row = await store.get_task_by_inbound(job.id)
       const val = raw(err)
       if (row && row.status !== "completed" && row.status !== "failed" && row.status !== "aborted") {

@@ -29,10 +29,62 @@ type CardData = {
   custom?: boolean
 }
 
-type CardElement = {
+type CardPlainText = {
+  tag: "plain_text"
+  content: string
+}
+
+type ApprovalChoice = "once" | "always" | "reject"
+
+type CardCallbackValue = {
+  req: string
+  kind: "approval" | "question"
+  req_type: "permission" | "question"
+  choice?: ApprovalChoice
+  choices_field?: string
+}
+
+type CardBehavior = {
+  type: "callback"
+  value: CardCallbackValue
+}
+
+type CardMarkdownElement = {
   tag: "markdown"
   content: string
 }
+
+type CardButtonElement = {
+  tag: "button"
+  name: string
+  text: CardPlainText
+  type?: "default" | "primary" | "primary_filled" | "danger" | "danger_filled"
+  form_action_type?: "submit" | "reset"
+  behaviors: CardBehavior[]
+}
+
+type CardSelectOption = {
+  text: CardPlainText
+  value: string
+}
+
+type CardMultiSelectElement = {
+  tag: "multi_select_static"
+  name: string
+  required: boolean
+  width: "fill"
+  placeholder: CardPlainText
+  selected_values: string[]
+  options: CardSelectOption[]
+}
+
+type CardFormElement = {
+  tag: "form"
+  name: string
+  elements: Array<CardMultiSelectElement | CardButtonElement>
+}
+
+type CardElement = CardMarkdownElement | CardButtonElement | CardFormElement
 
 type CardPayload = {
   schema: "2.0"
@@ -57,6 +109,13 @@ function imageLabel(alt: string, url: string) {
   return `${name}：${url}`
 }
 
+function plain(content: string): CardPlainText {
+  return {
+    tag: "plain_text",
+    content,
+  }
+}
+
 export function sanitizeMarkdown(text: string) {
   return text
     .replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_, alt: string, url: string) => imageLabel(alt, url))
@@ -73,6 +132,80 @@ function markdown(text: string): CardElement {
   return {
     tag: "markdown",
     content: sanitizeMarkdown(text),
+  }
+}
+
+function button(input: {
+  text: string
+  name: string
+  value: CardCallbackValue
+  type?: CardButtonElement["type"]
+  form_action_type?: CardButtonElement["form_action_type"]
+}): CardButtonElement {
+  return {
+    tag: "button",
+    name: input.name,
+    text: plain(input.text),
+    type: input.type,
+    form_action_type: input.form_action_type,
+    behaviors: [
+      {
+        type: "callback",
+        value: input.value,
+      },
+    ],
+  }
+}
+
+function selectOption(label: string): CardSelectOption {
+  return {
+    text: plain(label),
+    value: label,
+  }
+}
+
+function approvalValue(req: string | undefined, choice: ApprovalChoice): CardCallbackValue {
+  return {
+    req: req ?? "",
+    kind: "approval",
+    req_type: "permission",
+    choice,
+  }
+}
+
+const question_field = "choices"
+
+function questionValue(req: string | undefined): CardCallbackValue {
+  return {
+    req: req ?? "",
+    kind: "question",
+    req_type: "question",
+    choices_field: question_field,
+  }
+}
+
+function questionForm(body: CardData): CardFormElement {
+  return {
+    tag: "form",
+    name: "question_form",
+    elements: [
+      {
+        tag: "multi_select_static",
+        name: question_field,
+        required: true,
+        width: "fill",
+        placeholder: plain("请选择一个或多个选项"),
+        selected_values: [],
+        options: (body.options ?? []).map(selectOption),
+      },
+      button({
+        text: "提交选择",
+        name: "submit_question",
+        type: "primary_filled",
+        form_action_type: "submit",
+        value: questionValue(body.req),
+      }),
+    ],
   }
 }
 
@@ -109,6 +242,24 @@ function approval(body: CardData) {
       markdown(`**工具:** ${body.tool ?? "tool"}`),
       ...(body.detail ? [markdown(body.detail)] : []),
       markdown(`请直接回复序号继续；如需更正本次操作，也可以直接发送文本。\n${numbered(list)}`),
+      button({
+        text: list[0],
+        name: "approval_once",
+        type: "primary_filled",
+        value: approvalValue(body.req, "once"),
+      }),
+      button({
+        text: list[1],
+        name: "approval_always",
+        type: "default",
+        value: approvalValue(body.req, "always"),
+      }),
+      button({
+        text: list[2],
+        name: "approval_reject",
+        type: "danger_filled",
+        value: approvalValue(body.req, "reject"),
+      }),
     ],
   })
 }
@@ -156,6 +307,7 @@ function question(body: CardData) {
     },
     elements: [
       markdown(hint),
+      ...(list.length > 0 ? [questionForm(body)] : []),
     ],
   })
 }

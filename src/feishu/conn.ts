@@ -1,12 +1,12 @@
 import readline from "node:readline"
-import type { ConnState, FeishuConn, InboundMessage } from "../contracts.js"
-import { parseInbound, parseMessage } from "./map.js"
+import type { ConnState, FeishuConn, InboundEvent } from "../contracts.js"
+import { parseCardAction, parseInbound, parseMessage } from "./map.js"
 
 type Input = {
   mode: "stdin" | "long_conn" | "off"
   app_id?: string
   app_secret?: string
-  on_msg: (input: InboundMessage) => Promise<void>
+  on_msg: (input: InboundEvent) => Promise<void>
   on_state?: (input: ConnState) => Promise<void>
 }
 
@@ -101,6 +101,12 @@ export function createFeishuConn(input: Input): FeishuConn {
             const item = parseMessage(data)
             if (!item) return
             await input.on_msg(item)
+          },
+          "card.action.trigger": async (data: unknown) => {
+            const item = parseCardAction(data)
+            if (!item) return {}
+            await input.on_msg(item)
+            return {}
           },
           "im.message.message_read_v1": async () => undefined,
         })
