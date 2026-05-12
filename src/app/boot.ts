@@ -250,25 +250,10 @@ export function guide(text: string, assets: InboundMessage["assets"]) {
   ].join("\n\n")
 }
 
-export function permit(text: string) {
-  const list = index(text)
-  if (list?.length === 1) {
-    if (list[0] === 1) return "once" as const
-    if (list[0] === 2) return "always" as const
-    if (list[0] === 3) return "reject" as const
-  }
-}
-
-function index(text: string) {
+function numeric_only(text: string) {
   const val = text.trim()
-  if (!val) return
-  if (!/^[\d\s,，、.。()（）]+$/.test(val)) return
-  const list = val
-    .split(/[^\d]+/)
-    .map((item) => Number(item))
-    .filter((item) => Number.isInteger(item) && item > 0)
-  if (list.length === 0) return
-  return [...new Set(list)]
+  if (!val) return false
+  return /\d/.test(val) && /^[\d\s,，、.。()（）]+$/.test(val)
 }
 
 function qnote(input: { title: string; opts: string[]; custom: boolean }) {
@@ -279,14 +264,6 @@ function anote(input: { tool: string; detail: string }) {
   return `approval:${encodeURIComponent(input.tool)}:${encodeURIComponent(input.detail)}`
 }
 
-export function pick(text: string, opts: string[]) {
-  if (opts.length === 0) return
-  const ids = index(text)
-  if (ids) {
-    const list = ids.map((item) => opts.at(item - 1)).filter((item): item is string => !!item)
-    if (list.length === ids.length) return [...new Set(list)]
-  }
-}
 
 function parts(text: string, assets: InboundMessage["assets"]) {
   const list = assets.filter((item): item is typeof item & { url: string; mime: string; name: string } => !!item.url && !!item.mime && !!item.name)
@@ -3972,28 +3949,38 @@ export async function on_msg(
   }
 
   if (prev?.status === "waiting_question" && prev.req) {
+    const meta = qmeta(prev.note)
+    const list = meta?.opts ?? []
     if (!val) {
       await feishu.reply({
         msg_id: inbound.message_id,
         out: render.progress({
-          text: "当前这一步需要文字回答，请直接发送文本内容。",
+          text:
+            list.length > 0
+              ? meta?.custom
+                ? "当前这一步请在卡片中选择后提交；如需自定义补充，请直接发送非数字文本。"
+                : "当前这一步请在卡片中选择后提交。"
+              : "当前这一步没有选项，请直接发送你的回答。",
         }),
       })
       return
     }
-    const meta = qmeta(prev.note)
-    const list = meta?.opts ?? []
-    const pickd = pick(val, list)
-    if (list.length > 0 && !pickd && !meta?.custom) {
-      await feishu.reply({
-        msg_id: inbound.message_id,
-        out: render.progress({
-          text: "当前这一步可在卡片中选择后提交；也可直接回复序号，例如 1；如需多选，可回复 1,2。",
-        }),
-      })
-      return
+    const numeric = numeric_only(val)
+    if (list.length > 0) {
+      const allow_text = meta?.custom === true && !numeric
+      if (!allow_text) {
+        await feishu.reply({
+          msg_id: inbound.message_id,
+          out: render.progress({
+            text: meta?.custom
+              ? "当前这一步请在卡片中选择后提交；如需自定义补充，请直接发送非数字文本。"
+              : "当前这一步请在卡片中选择后提交。",
+          }),
+        })
+        return
+      }
     }
-    const answers = pickd ? [pickd] : [[val]]
+    const answers = [[val]]
     await task.run(prev.id)
     await resolve_wait(store, prev, prev.req)
     await publish(
@@ -4027,60 +4014,64 @@ export async function on_msg(
   }
 
   if (prev?.status === "waiting_permission" && prev.req) {
-    const reply = val ? permit(val) : undefined
-    if (!reply) {
-      if (val) {
-        await task.run(prev.id)
-        await resolve_wait(store, prev, prev.req)
-        await task.note({
-          id: prev.id,
-          note: "已收到更正说明，正在继续执行…",
-        })
-        await publish(
-          store,
-          task as ReturnType<typeof createTaskSvc>,
-          feishu as ReturnType<typeof createFeishuApi>,
-          item.session_id,
-          item.chat_id,
-          render.progress({
-            text: "已收到你的更正说明，正在继续执行…",
-          }),
-          undefined,
-          prev,
-          progress_meta,
-        )
-        await opencode.allow({
-          req: prev.req,
-          reply: "reject",
-          message: val,
-          directory: item.directory,
-          workspace: item.workspace_id,
-        })
-        await flush_next_request(
-          store,
-          task as ReturnType<typeof createTaskSvc>,
-          feishu as ReturnType<typeof createFeishuApi>,
-          render as ReturnType<typeof createRender>,
-          item.session_id,
-          item.chat_id,
-        )
-        return
-      }
+    if (!val || numeric_only(val)) {
       await feishu.reply({
         msg_id: inbound.message_id,
         out: render.progress({
-          text: "当前在等待权限审批，可点击卡片按钮，或回复 1、2、3；如果你想更正本次操作，也可以直接发送文本。",
+          text: "当前在等待权限审批，请点击卡片按钮继续；如需更正本次操作，请直接发送非数字文本说明。",
         }),
       })
       return
     }
-    if (reply === "reject") {
-      await resolve_wait(store, prev, prev.req)
-      await task.run(prev.id)
-    } else {
-      await task.run(prev.id)
-      await resolve_wait(store, prev, prev.req)
+    try {
+      await opencode.allow({
+        req: prev.req,
+        reply: "reject",
+        message: val,
+        directory: item.directory,
+        workspace: item.workspace_id,
+      })
+    } catch (err) {
+      await feishu.reply({
+        msg_id: inbound.message_id,
+        out: render.err({
+          text: explain(err),
+        }),
+      })
+      return
     }
+    try {
+      await opencode.prompt({
+        session_id: item.session_id,
+        text: val,
+        directory: item.directory,
+        workspace: item.workspace_id,
+        ...(item.model ? { model: item.model } : {}),
+      })
+    } catch (err) {
+      const reason = raw(err)
+      await task.fail({
+        id: prev.id,
+        err: reason,
+      })
+      const out = render.err({
+        text: explain(reason),
+      })
+      await publish(
+        store,
+        task as ReturnType<typeof createTaskSvc>,
+        feishu as ReturnType<typeof createFeishuApi>,
+        item.session_id,
+        item.chat_id,
+        out,
+        undefined,
+        prev,
+        error_meta,
+      )
+      return
+    }
+    await task.run(prev.id)
+    await resolve_wait(store, prev, prev.req)
     await publish(
       store,
       task as ReturnType<typeof createTaskSvc>,
@@ -4088,19 +4079,12 @@ export async function on_msg(
       item.session_id,
       item.chat_id,
       render.progress({
-        text:
-          reply === "always" ? "已始终允许，正在继续执行…" : reply === "reject" ? "已拒绝当前权限请求。" : "已允许一次，正在继续执行…",
+        text: "已收到你的更正说明，正在继续执行…",
       }),
       undefined,
       prev,
       progress_meta,
     )
-    await opencode.allow({
-      req: prev.req,
-      reply,
-      directory: item.directory,
-      workspace: item.workspace_id,
-    })
     await flush_next_request(
       store,
       task as ReturnType<typeof createTaskSvc>,

@@ -55,7 +55,7 @@ describe("feishu card rendering", () => {
     expect(approval.schema).toBe("2.0")
     expect(approvalElements[2]).toEqual({
       tag: "markdown",
-      content: "可直接点击下方按钮继续；也可回复 1/2/3；如需更正本次操作，也可以直接发送文本。\n1. 允许一次\n2. 始终允许\n3. 拒绝",
+      content: "请直接点击下方按钮继续；如需更正本次操作，请直接发送非数字文本说明。",
     })
     expect(once).toMatchObject({
       tag: "button",
@@ -120,7 +120,7 @@ describe("feishu card rendering", () => {
     expect(question.schema).toBe("2.0")
     expect(questionElements[0]).toEqual({
       tag: "markdown",
-      content: "可直接在卡片中选择后提交；也可回复序号继续；如需多选，可回复 1,2；如需自定义回答，也可以直接发送文字。\n1. A\n2. B",
+      content: "请在卡片中选择后提交；如需自定义补充，请直接发送非数字文本。",
     })
     expect(form).toMatchObject({
       tag: "form",
@@ -166,7 +166,7 @@ describe("feishu card rendering", () => {
     expect(elements(question)).toEqual([
       {
         tag: "markdown",
-        content: "请直接发送文字继续。",
+        content: "请直接发送你的回答继续。",
       },
     ])
   })

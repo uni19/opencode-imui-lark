@@ -209,10 +209,6 @@ function questionForm(body: CardData): CardFormElement {
   }
 }
 
-function numbered(list: string[]) {
-  return list.map((item, index) => `${index + 1}. ${item}`).join("\n")
-}
-
 function payload(input: Omit<CardPayload, "schema" | "body"> & { elements: CardElement[] }): CardPayload {
   return {
     schema: "2.0",
@@ -241,7 +237,7 @@ function approval(body: CardData) {
     elements: [
       markdown(`**工具:** ${body.tool ?? "tool"}`),
       ...(body.detail ? [markdown(body.detail)] : []),
-      markdown(`可直接点击下方按钮继续；也可回复 1/2/3；如需更正本次操作，也可以直接发送文本。\n${numbered(list)}`),
+      markdown("请直接点击下方按钮继续；如需更正本次操作，请直接发送非数字文本说明。"),
       button({
         text: list[0],
         name: "approval_once",
@@ -288,10 +284,10 @@ function question(body: CardData) {
   const list = body.options ?? []
   const hint =
     list.length === 0
-      ? "请直接发送文字继续。"
+      ? "请直接发送你的回答继续。"
       : body.custom
-        ? `可直接在卡片中选择后提交；也可回复序号继续；如需多选，可回复 1,2；如需自定义回答，也可以直接发送文字。\n${numbered(list)}`
-        : `可直接在卡片中选择后提交；也可回复序号继续；如需多选，可回复 1,2。\n${numbered(list)}`
+        ? "请在卡片中选择后提交；如需自定义补充，请直接发送非数字文本。"
+        : "请在卡片中选择后提交。"
 
   return payload({
     config: {

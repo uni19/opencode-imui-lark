@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from "bun:test"
-import { body, guide, holdmsg, moremsg, on_cmd, on_conn, on_msg, permit, pick, publish, recover, status_text } from "../src/app/boot.ts"
+import { body, guide, holdmsg, moremsg, on_cmd, on_conn, on_msg, publish, recover, status_text } from "../src/app/boot.ts"
 import type { AppCfg, ConnState, FeishuApi, ImSession, InboundMessage, OpencodeResult, OpencodeSession, OpencodeStatus, OpencodeSvc, RenderOut, SessionSvc, Task } from "../src/contracts.ts"
 import { createSessionSvc } from "../src/gateway/session.ts"
 import { createTaskSvc } from "../src/gateway/task.ts"
@@ -262,20 +262,6 @@ describe("boot helpers", () => {
         }),
       ),
     ).toBe("看看这个")
-  })
-
-  test("permission only accepts explicit numeric choices", () => {
-    expect(permit("1")).toBe("once")
-    expect(permit("2")).toBe("always")
-    expect(permit("3")).toBe("reject")
-    expect(permit("继续")).toBeUndefined()
-    expect(permit("1,2")).toBeUndefined()
-  })
-
-  test("question picks numbered options", () => {
-    expect(pick("1,2", ["a", "b", "c"])).toEqual(["a", "b"])
-    expect(pick("2 2", ["a", "b", "c"])).toEqual(["b"])
-    expect(pick("继续", ["a", "b"])).toBeUndefined()
   })
 
   test("adds attachment guidance only when assets are present", () => {
@@ -581,7 +567,7 @@ describe("boot helpers", () => {
         pref: { chat: null, user: null },
         conf: cfg(),
       }),
-    ).toContain("下一步：可点击卡片按钮，或回复 1/2/3；如需更正本次操作，也可直接发送文本。")
+    ).toContain("下一步：请点击卡片按钮继续；如需更正本次操作，请直接发送非数字文本说明。")
 
     expect(
       status_text({
@@ -593,7 +579,7 @@ describe("boot helpers", () => {
         pref: { chat: null, user: null },
         conf: cfg(),
       }),
-    ).toContain("下一步：可在卡片中选择并提交，也可直接回复序号；如需多选，可回复 1,2。")
+    ).toContain("下一步：请在卡片中选择后提交。")
 
     expect(
       status_text({
@@ -605,7 +591,7 @@ describe("boot helpers", () => {
         pref: { chat: null, user: null },
         conf: cfg(),
       }),
-    ).toContain("下一步：可在卡片中选择并提交，也可直接回复序号；如需多选，可回复 1,2；若需自定义回答，也可发送文本。")
+    ).toContain("下一步：请在卡片中选择后提交；如需自定义补充，请直接发送非数字文本。")
 
     expect(
       status_text({
@@ -617,7 +603,7 @@ describe("boot helpers", () => {
         pref: { chat: null, user: null },
         conf: cfg(),
       }),
-    ).toContain("下一步：请直接发送文字回答继续。")
+    ).toContain("下一步：请直接发送你的回答继续。")
   })
 
   test("renders terminal note for completed status", () => {
@@ -4867,7 +4853,7 @@ describe("commands", () => {
     })
   })
 
-  test("answering current waiting question automatically surfaces the next queued question", async () => {
+  test("numeric text no longer answers current waiting question or surfaces the next queued question", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
@@ -4932,9 +4918,17 @@ describe("commands", () => {
       }),
     )
 
-    expect(calls).toEqual([{ req: "req_q_1", answers: [["A"]] }])
+    expect(calls).toEqual([])
     expect((await store.get_task("tsk_q_1"))?.status).toBe("waiting_question")
-    expect((await store.get_task("tsk_q_1"))?.req).toBe("req_q_2")
+    expect((await store.get_task("tsk_q_1"))?.req).toBe("req_q_1")
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        title: "OpenCode",
+        template: "blue",
+        text: "当前这一步请在卡片中选择后提交。",
+      },
+    })
     expect(
       ui.list.some((item) =>
         item.out.kind === "card" &&
@@ -4944,11 +4938,10 @@ describe("commands", () => {
         (item.out.body as { type?: string; req?: string }).type === "question" &&
         (item.out.body as { type?: string; req?: string }).req === "req_q_2",
       ),
-    ).toBe(true)
+    ).toBe(false)
   })
 
-  // 用户处理完第一张权限卡后，飞书里应该继续出现下一张，而不是卡死在第一张之后。
-  test("answering current waiting permission automatically surfaces the next queued approval", async () => {
+  test("numeric text no longer answers current waiting permission or surfaces the next queued approval", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
@@ -5015,9 +5008,17 @@ describe("commands", () => {
       }),
     )
 
-    expect(calls).toEqual([{ req: "req_perm_1", reply: "once" }])
+    expect(calls).toEqual([])
     expect((await store.get_task("tsk_perm_1"))?.status).toBe("waiting_permission")
-    expect((await store.get_task("tsk_perm_1"))?.req).toBe("req_perm_2")
+    expect((await store.get_task("tsk_perm_1"))?.req).toBe("req_perm_1")
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        title: "OpenCode",
+        template: "blue",
+        text: "当前在等待权限审批，请点击卡片按钮继续；如需更正本次操作，请直接发送非数字文本说明。",
+      },
+    })
     expect(
       ui.list.some((item) =>
         item.out.kind === "card" &&
@@ -5027,7 +5028,7 @@ describe("commands", () => {
         (item.out.body as { type?: string; req?: string }).type === "approval" &&
         (item.out.body as { type?: string; req?: string }).req === "req_perm_2",
       ),
-    ).toBe(true)
+    ).toBe(false)
   })
 
   test("waiting_question accepts direct text answer when custom reply is allowed", async () => {
@@ -5045,6 +5046,7 @@ describe("commands", () => {
       }),
     )
     const calls: Array<{ req: string; answers: string[][]; workspace?: string }> = []
+    const prompt_calls: Array<{ session_id: string; text?: string }> = []
     const oc = {
       ...opencode(),
       async answer(input) {
@@ -5052,6 +5054,12 @@ describe("commands", () => {
           req: input.req,
           answers: input.answers,
           workspace: input.workspace,
+        })
+      },
+      async prompt(input) {
+        prompt_calls.push({
+          session_id: input.session_id,
+          text: input.text,
         })
       },
     } satisfies OpencodeSvc
@@ -5079,6 +5087,7 @@ describe("commands", () => {
         workspace: undefined,
       },
     ])
+    expect(prompt_calls).toEqual([])
     expect((await store.get_task("tsk_1"))?.status).toBe("running")
     expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
@@ -5090,7 +5099,107 @@ describe("commands", () => {
     })
   })
 
-  test("waiting_question without a valid choice reminds about card submit or numbered reply", async () => {
+  test("waiting_question with custom options rejects numeric-only text and keeps waiting", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_question",
+        req_type: "question",
+        req: "req_q_numeric",
+        note: `question:1:${encodeURIComponent("要更新哪个仓库的 AGENTS.md？")}:${encodeURIComponent("workspace/opencode")}|${encodeURIComponent("workspace/opencode-feishu-imui")}`,
+      }),
+    )
+    const calls: Array<{ req: string; answers: string[][] }> = []
+    const oc = {
+      ...opencode(),
+      async answer(input) {
+        calls.push({ req: input.req, answers: input.answers })
+      },
+    } satisfies OpencodeSvc
+
+    await on_msg(
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({
+        id: "in_q_numeric",
+        event_id: "evt_q_numeric",
+        message_id: "msg_q_numeric",
+        text: "1",
+      }),
+    )
+
+    expect(calls).toEqual([])
+    expect((await store.get_task("tsk_1"))?.status).toBe("waiting_question")
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        title: "OpenCode",
+        template: "blue",
+        text: "当前这一步请在卡片中选择后提交；如需自定义补充，请直接发送非数字文本。",
+      },
+    })
+  })
+
+  test("waiting_question without options accepts numeric-looking free text", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_question",
+        req_type: "question",
+        req: "req_q_port",
+        note: `question:1:${encodeURIComponent("请输入端口号")}`,
+      }),
+    )
+    const calls: Array<{ req: string; answers: string[][] }> = []
+    const oc = {
+      ...opencode(),
+      async answer(input) {
+        calls.push({ req: input.req, answers: input.answers })
+      },
+    } satisfies OpencodeSvc
+
+    await on_msg(
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({
+        id: "in_q_port",
+        event_id: "evt_q_port",
+        message_id: "msg_q_port",
+        text: "4096",
+      }),
+    )
+
+    expect(calls).toEqual([{ req: "req_q_port", answers: [["4096"]] }])
+    expect((await store.get_task("tsk_1"))?.status).toBe("running")
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        title: "OpenCode",
+        template: "blue",
+        text: "已提交补充信息",
+      },
+    })
+  })
+
+  test("waiting_question without a valid choice reminds about card submit", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
@@ -5127,12 +5236,12 @@ describe("commands", () => {
       body: {
         title: "OpenCode",
         template: "blue",
-        text: "当前这一步可在卡片中选择后提交；也可直接回复序号，例如 1；如需多选，可回复 1,2。",
+        text: "当前这一步请在卡片中选择后提交。",
       },
     })
   })
 
-  test("waiting_permission treats direct text as correction and keeps task running", async () => {
+  test("waiting_permission treats direct text as correction, rejects permission, and continues task", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
@@ -5146,7 +5255,9 @@ describe("commands", () => {
         note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/usr" }))}`,
       }),
     )
-    const calls: Array<{ req: string; reply: "once" | "always" | "reject"; message?: string; workspace?: string }> = []
+    const allow_calls: Array<{ req: string; reply: "once" | "always" | "reject"; message?: string; workspace?: string }> = []
+    const prompt_calls: Array<{ session_id: string; text?: string; workspace?: string }> = []
+    const steps: string[] = []
     const oc = {
       ...opencode({
         status: {
@@ -5154,10 +5265,19 @@ describe("commands", () => {
         },
       }),
       async allow(input) {
-        calls.push({
+        steps.push("allow")
+        allow_calls.push({
           req: input.req,
           reply: input.reply,
           message: input.message,
+          workspace: input.workspace,
+        })
+      },
+      async prompt(input) {
+        steps.push("prompt")
+        prompt_calls.push({
+          session_id: input.session_id,
+          text: input.text,
           workspace: input.workspace,
         })
       },
@@ -5179,11 +5299,19 @@ describe("commands", () => {
       }),
     )
 
-    expect(calls).toEqual([
+    expect(steps).toEqual(["allow", "prompt"])
+    expect(allow_calls).toEqual([
       {
         req: "req_perm_1",
         reply: "reject",
         message: "说错了，我要看的是 /tmp/",
+        workspace: undefined,
+      },
+    ])
+    expect(prompt_calls).toEqual([
+      {
+        session_id: "ses_1",
+        text: "说错了，我要看的是 /tmp/",
         workspace: undefined,
       },
     ])
@@ -5198,7 +5326,7 @@ describe("commands", () => {
       },
     })
   })
-  test("waiting_permission with an invalid reply treats it as correction text", async () => {
+  test("waiting_permission keeps waiting when correction reject request fails", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
@@ -5212,11 +5340,18 @@ describe("commands", () => {
         note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/usr" }))}`,
       }),
     )
-    const calls: Array<{ req: string; reply: "once" | "always" | "reject"; message?: string }> = []
+    let prompt_calls = 0
     const oc = {
-      ...opencode(),
-      async allow(input) {
-        calls.push({ req: input.req, reply: input.reply, message: input.message })
+      ...opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      async allow() {
+        throw new Error("permission reply failed")
+      },
+      async prompt() {
+        prompt_calls += 1
       },
     } satisfies OpencodeSvc
 
@@ -5236,20 +5371,74 @@ describe("commands", () => {
       }),
     )
 
-    expect(calls).toEqual([
-      {
-        req: "req_perm_invalid",
-        reply: "reject",
-        message: "点错了，应该看 /tmp",
-      },
-    ])
-    expect((await store.get_task("tsk_1"))?.status).toBe("running")
+    expect(prompt_calls).toBe(0)
+    expect((await store.get_task("tsk_1"))?.status).toBe("waiting_permission")
+    expect((await store.get_task("tsk_1"))?.req).toBe("req_perm_invalid")
     expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
       kind: "card",
       body: {
         title: "OpenCode",
-        template: "blue",
-        text: "已收到你的更正说明，正在继续执行…",
+        template: "red",
+        text: expect.stringContaining("permission reply failed"),
+      },
+    })
+  })
+
+  test("waiting_permission fails task when follow-up correction prompt fails", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session())
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_permission",
+        req_type: "permission",
+        req: "req_perm_prompt_fail",
+        note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/usr" }))}`,
+      }),
+    )
+    const steps: string[] = []
+    const oc = {
+      ...opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      async allow() {
+        steps.push("allow")
+      },
+      async prompt() {
+        steps.push("prompt")
+        throw new Error("prompt failed")
+      },
+    } satisfies OpencodeSvc
+
+    await on_msg(
+      cfg(),
+      route(),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({
+        id: "in_perm_prompt_fail",
+        event_id: "evt_perm_prompt_fail",
+        message_id: "msg_perm_prompt_fail",
+        text: "点错了，应该看 /tmp",
+      }),
+    )
+
+    expect(steps).toEqual(["allow", "prompt"])
+    expect((await store.get_task("tsk_1"))?.status).toBe("failed")
+    expect((await store.get_task("tsk_1"))?.req).toBe("req_perm_prompt_fail")
+    expect(ui.list[ui.list.length - 1]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        title: "OpenCode",
+        template: "red",
+        text: expect.stringContaining("prompt failed"),
       },
     })
   })
@@ -5257,7 +5446,7 @@ describe("commands", () => {
 })
 
 // 第二张权限卡如果还没有 outbound_id，必须新发消息，不能错误 patch 到第一张卡上。
-test("next queued approval is sent as a new message when it has no outbound yet", async () => {
+test("next queued approval is sent only after correction prompt succeeds", async () => {
   const store = createMemoryStore()
   const svc = createTaskSvc(store)
   const ui = feishu()
@@ -5296,16 +5485,33 @@ test("next queued approval is sent as a new message when it has no outbound yet"
     created_at: 2,
     updated_at: 2,
   })
+  const steps: string[] = []
+  let prompt_started!: () => void
+  const started = new Promise<void>((resolve) => {
+    prompt_started = resolve
+  })
+  let release_prompt!: () => void
+  const blocked = new Promise<void>((resolve) => {
+    release_prompt = resolve
+  })
   const oc = {
     ...opencode({
       status: {
         ses_1: { type: "busy" },
       },
     }),
-    async allow() {},
+    async allow() {
+      steps.push("allow")
+    },
+    async prompt() {
+      steps.push("prompt")
+      prompt_started()
+      await blocked
+      steps.push("prompt_done")
+    },
   } satisfies OpencodeSvc
 
-  await on_msg(
+  const pending = on_msg(
     cfg(),
     route(),
     svc,
@@ -5317,11 +5523,30 @@ test("next queued approval is sent as a new message when it has no outbound yet"
       id: "in_perm_chain_answer",
       event_id: "evt_perm_chain_answer",
       message_id: "msg_perm_chain_answer",
-      text: "1",
+      text: "路径写错了，请改看 /srv",
     }),
   )
 
-    expect(ui.list[ui.list.length - 1]).toMatchObject({
+  await started
+  expect(steps).toEqual(["allow", "prompt"])
+  expect((await store.get_task("tsk_perm_chain_1"))?.status).toBe("waiting_permission")
+  expect((await store.get_task("tsk_perm_chain_1"))?.req).toBe("req_perm_chain_1")
+  expect(
+    ui.list.some((item) =>
+      item.out.kind === "card" &&
+      !!item.out.body &&
+      typeof item.out.body === "object" &&
+      "type" in item.out.body &&
+      (item.out.body as { type?: string; req?: string }).type === "approval" &&
+      (item.out.body as { type?: string; req?: string }).req === "req_perm_chain_2",
+    ),
+  ).toBe(false)
+
+  release_prompt()
+  await pending
+
+  expect(steps).toEqual(["allow", "prompt", "prompt_done"])
+  expect(ui.list[ui.list.length - 1]).toMatchObject({
     kind: "reply",
     out: {
       kind: "card",
