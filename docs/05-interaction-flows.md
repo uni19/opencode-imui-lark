@@ -38,8 +38,8 @@ OpenCode -> permission.asked / question.asked
 Gateway -> append assistant_outbound(wait)
 Gateway -> if foreground && head wait: visible card
 Gateway -> else: deferred only
-User -> reply 1 / 2 / 3 or free text
-Gateway -> bind reply to foreground task head wait
+User -> click card action or send allowed free text
+Gateway -> bind card callback or free-text reply to foreground task head wait
 Gateway -> OpenCode permission.reply / question.reply
 OpenCode -> continue execution on same task
 ```
