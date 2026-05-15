@@ -61,6 +61,9 @@ describe("release package", () => {
     expect(readme).toContain("opencode-feishu-imui")
     expect(readme).toContain("opencode serve --hostname 127.0.0.1 --port 4096")
     expect(readme).toContain("opencode-feishu-imui-service install")
+    expect(readme).toContain("- `/models`")
+    expect(readme).toContain("`/models` 在 provider 信息暴露 variants 时，会在对应 model 后显示 `[variants: ...]`；只有本次展示结果里存在 variants 时，末尾才会出现切换说明。")
+    expect(readme).toContain("`/model` 无参数时会说明：当 provider 暴露 variants 时，可在 `/models` 查看这些 variants；切换时使用 `/model <provider>/<model_id>@<variant>`，清除当前 variant 则直接使用 `/model <provider>/<model_id>`。")
   })
 
   test("renders service helper assets", () => {
