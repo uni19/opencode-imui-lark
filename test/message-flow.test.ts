@@ -599,7 +599,7 @@ describe("message flow", () => {
     if (!rebound) throw new Error("missing rebound session")
 
     expect(rebound.session_id).not.toBe(current.session_id)
-    expect(await store.get_session_model_pref(current.session_id)).toBeNull()
+    expect(await store.get_session_model_pref(current.session_id)).toEqual({ mode: "default" })
     expect(await store.get_session_model_pref(rebound.session_id)).toEqual({ mode: "default" })
 
     const rehydratedDefault = {
@@ -622,6 +622,117 @@ describe("message flow", () => {
       session_id: rebound.session_id,
       model: rehydratedDefault,
     })
+  })
+
+  test("switching back to the old session keeps preserved default-model semantics after repo rebind rollover", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    const current = await route.resolve({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+    })
+
+    const reset = await route.model({
+      session_id: current.session_id,
+      mode: "default",
+    })
+    if (!reset) throw new Error("missing reset session")
+
+    const rebound = await route.bind({
+      session_id: reset.session_id,
+      directory: "/tmp/alt",
+      workspace_id: "ws_alt",
+    })
+    if (!rebound) throw new Error("missing rebound session")
+
+    expect(rebound.session_id).toBe("ses_2")
+    expect(await store.get_session_model_pref("ses_1")).toEqual({ mode: "default" })
+    expect(await store.get_session_model_pref("ses_2")).toEqual({ mode: "default" })
+
+    const rehydratedDefault = {
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4",
+    }
+    const rehydratedRoute = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: rehydratedDefault,
+    })
+
+    const switchedBack = await rehydratedRoute.switch({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+      session: {
+        id: "ses_1",
+        title: "Session ses_1",
+        directory: "/tmp",
+        workspace_id: undefined,
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          variant: "fast",
+        },
+        created_at: 1,
+        updated_at: 1,
+      },
+    })
+
+    expect(switchedBack).toMatchObject({
+      session_id: "ses_1",
+      directory: "/tmp",
+      workspace_id: undefined,
+      model: rehydratedDefault,
+    })
+
+    await on_msg(
+      {
+        ...conf,
+        opencode: {
+          ...conf.opencode,
+          model: rehydratedDefault,
+        },
+      },
+      rehydratedRoute,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_switch_back_preserved_default", {
+        text: "切回旧会话后继续",
+      }),
+    )
+
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]).toMatchObject({
+      session_id: "ses_1",
+      directory: "/tmp",
+      model: rehydratedDefault,
+    })
+    expect(ai.prompts[0]?.workspace).toBeUndefined()
+    expect(ai.prompts[0]?.model).not.toHaveProperty("variant")
   })
 
   test("session switch preserves remote session model variant into the next prompt", async () => {

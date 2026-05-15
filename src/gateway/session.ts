@@ -240,7 +240,10 @@ export function createSessionSvc(input: Input): SessionSvc {
         updated_at: now(),
       }
       await input.store.save_session(next)
-      await input.store.move_session_model_pref(items.session_id, next.session_id)
+      if (next.session_id !== items.session_id) {
+        const pref = await input.store.get_session_model_pref(items.session_id)
+        if (pref) await input.store.save_session_model_pref(next.session_id, pref)
+      }
       return next
     },
 
