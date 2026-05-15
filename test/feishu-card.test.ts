@@ -21,30 +21,30 @@ function callbackValue(item: CardElement | undefined) {
 }
 
 describe("feishu card rendering", () => {
-  test("renders status card as schema 2.0 markdown content", () => {
+  test("renders status card as schema 2.0 markdown content with escaped dynamic text", () => {
     const out = buildCard({
       title: "OpenCode",
-      step: "处理中",
-      text: "**粗体**\n- item\n`code`",
+      step: "处理中 *now*",
+      text: "**粗体**\n- item\n`code`\n# title\n1. first",
     }) as Record<string, unknown>
 
     expect(out.schema).toBe("2.0")
     expect(elements(out)[0]).toEqual({
       tag: "markdown",
-      content: "**处理中**",
+      content: "**处理中 \\*now\\***",
     })
     expect(elements(out)[1]).toEqual({
       tag: "markdown",
-      content: "**粗体**\n- item\n`code`",
+      content: "\\*\\*粗体\\*\\*\n\\- item\n\\`code\\`\n\\# title\n1\\. first",
     })
   })
 
-  test("renders approval card with callback actions", () => {
+  test("renders approval card with callback actions and escaped dynamic markdown", () => {
     const approval = buildCard({
       type: "approval",
       req: "req_approval_1",
-      tool: "external_directory",
-      detail: "`/tmp`",
+      tool: "external_directory *danger*",
+      detail: "`/tmp`\n- keep out",
     }) as Record<string, unknown>
 
     const approvalElements = elements(approval)
@@ -53,6 +53,14 @@ describe("feishu card rendering", () => {
     const reject = buttonByName(approvalElements, "approval_reject")
 
     expect(approval.schema).toBe("2.0")
+    expect(approvalElements[0]).toEqual({
+      tag: "markdown",
+      content: "**工具:** external\\_directory \\*danger\\*",
+    })
+    expect(approvalElements[1]).toEqual({
+      tag: "markdown",
+      content: "\\`/tmp\\`\n\\- keep out",
+    })
     expect(approvalElements[2]).toEqual({
       tag: "markdown",
       content: "请直接点击下方按钮继续；如需更正本次操作，请直接发送非数字文本说明。",
@@ -184,5 +192,24 @@ describe("feishu card rendering", () => {
 
     expect(String(elements(out)[0]?.content ?? elements(out)[1]?.content)).not.toContain("![thumb](")
     expect(JSON.stringify(out)).not.toContain('"image_key":"https://via.placeholder.com/120x60"')
+  })
+
+  test("keeps image sanitization coverage while escaping dynamic markdown around labels", () => {
+    const approval = buildCard({
+      type: "approval",
+      tool: "![alt](https://via.placeholder.com/120x60)",
+      detail: '<img src="https://via.placeholder.com/120x60" alt="demo" />',
+    }) as Record<string, unknown>
+
+    const approvalElements = elements(approval)
+
+    expect(approvalElements[0]).toEqual({
+      tag: "markdown",
+      content: "**工具:** 图片（alt）：https://via.placeholder.com/120x60",
+    })
+    expect(approvalElements[1]).toEqual({
+      tag: "markdown",
+      content: "图片（demo）：https://via.placeholder.com/120x60",
+    })
   })
 })

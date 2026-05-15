@@ -128,6 +128,14 @@ export function sanitizeMarkdown(text: string) {
     .replace(/<img\b[^>]*src=["'](https?:\/\/[^"']+)["'][^>]*>/gi, (_, url: string) => imageLabel("", url))
 }
 
+function escapeDynamicMarkdownText(text: string) {
+  return sanitizeMarkdown(text)
+    .replace(/[\\`*_~()[\]{}|]/g, "\\$&")
+    .replace(/^(\s{0,3})([#>])/gm, "$1\\$2")
+    .replace(/^(\s{0,3})([-+*])(\s+)/gm, "$1\\$2$3")
+    .replace(/^(\s{0,3})(\d+)\.(\s+)/gm, "$1$2\\.$3")
+}
+
 function markdown(text: string): CardElement {
   return {
     tag: "markdown",
@@ -222,6 +230,9 @@ function payload(input: Omit<CardPayload, "schema" | "body"> & { elements: CardE
 
 function approval(body: CardData) {
   const list = ["允许一次", "始终允许", "拒绝"]
+  const tool = body.tool ? escapeDynamicMarkdownText(body.tool) : "tool"
+  const detail = body.detail ? escapeDynamicMarkdownText(body.detail) : undefined
+
   return payload({
     config: {
       wide_screen_mode: true,
@@ -235,8 +246,8 @@ function approval(body: CardData) {
       },
     },
     elements: [
-      markdown(`**工具:** ${body.tool ?? "tool"}`),
-      ...(body.detail ? [markdown(body.detail)] : []),
+      markdown(`**工具:** ${tool}`),
+      ...(detail ? [markdown(detail)] : []),
       markdown("请直接点击下方按钮继续；如需更正本次操作，请直接发送非数字文本说明。"),
       button({
         text: list[0],
@@ -261,6 +272,9 @@ function approval(body: CardData) {
 }
 
 function status(body: CardData) {
+  const step = body.step ? escapeDynamicMarkdownText(body.step) : undefined
+  const text = escapeDynamicMarkdownText(body.text ?? "")
+
   return payload({
     config: {
       wide_screen_mode: true,
@@ -274,8 +288,8 @@ function status(body: CardData) {
       },
     },
     elements: [
-      ...(body.step ? [markdown(`**${body.step}**`)] : []),
-      markdown(body.text ?? ""),
+      ...(step ? [markdown(`**${step}**`)] : []),
+      markdown(text),
     ],
   })
 }
