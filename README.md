@@ -193,7 +193,7 @@ Feishu Open Platform
 - `OPENCODE_DIRECTORY`: 默认工作目录
 - `OPENCODE_WORKSPACE`: 默认 workspace
 - `OPENCODE_AGENT`: 默认 agent
-- `OPENCODE_MODEL`: 默认模型
+- `OPENCODE_MODEL`: 默认模型，格式为 `<provider>/<model_id>[@<variant>]`
 
 ## 飞书模式配置
 
@@ -240,12 +240,12 @@ OPENCODE_DIRECTORY=/absolute/path/to/your/worktree
 - `/repo --me <directory>`: 为当前用户设置默认目录，跨聊天复用
 - `/sessions`: 查看当前目录 / workspace 下最近会话
 - `/workspaces`: 查看当前目录下可用 workspace
-- `/model`: 查看当前模型和默认模型
-- `/model <provider>/<model_id>`: 为当前会话切换模型
+- `/model`: 查看当前模型和默认模型；当 provider 暴露 variants 时，可在 `/models` 查看这些 variants；切换时使用 `/model <provider>/<model_id>@<variant>`，若只想清除当前 variant 则直接使用 `/model <provider>/<model_id>`
+- `/model <provider>/<model_id>`: 为当前会话切换模型；如需指定 variant，可使用 `/model <provider>/<model_id>@<variant>`
 - `/model reset`: 恢复当前会话到默认模型
 - `/skills`: 查看当前目录 / workspace 下可用技能
 - `/agents`: 查看当前目录 / workspace 下可用 agent
-- `/models`: 查看当前目录 / workspace 下已连接 provider / model，返回模型名称和 model id
+- `/models`: 查看当前目录 / workspace 下已连接 provider / model；当 provider 信息暴露 variants 时，对应 model 后会显示 `[variants: ...]`；仅当本次展示结果里存在 variants 时，末尾才会出现切换说明
 - `/mcps`: 查看当前目录 / workspace 下 MCP 状态
 - `/commands`: 查看当前目录 / workspace 下可转发 slash 命令
 - `/repo --workspace <workspace>`: 为当前会话绑定 workspace

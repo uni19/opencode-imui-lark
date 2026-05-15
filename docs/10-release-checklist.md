@@ -140,9 +140,12 @@ bun run release:smoke
 - [ ] `/repo --chat <directory>`
 - [ ] `/repo --me <directory>`
 - [ ] `/repo --workspace <workspace>`
-- [ ] `/model`
-- [ ] `/model <provider>/<model>`
+- [ ] `/model`（无参数）会返回当前模型、默认模型，并明确提示：当 provider 暴露 variants 时，可在 `/models` 查看这些 variants；切换时使用 `/model <provider>/<model_id>@<variant>`，清除当前 variant 则直接使用 `/model <provider>/<model_id>`
+- [ ] `/model <provider>/<model_id>` / `/model <provider>/<model_id>@<variant>`
 - [ ] `/model reset`
+- [ ] `/models`
+- [ ] 当 provider 信息暴露 variants 时，`/models` 会在对应 model 后显示 `[variants: ...]`
+- [ ] 仅当本次 `/models` 展示结果里至少有一个 model 显示 variants 时，末尾出现切换说明；无 variants 时不出现
 - [ ] `/commands`
 - [ ] 未命中的 slash 能正确透传或明确失败
 

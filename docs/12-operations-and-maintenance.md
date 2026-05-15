@@ -28,7 +28,7 @@ bun run release:doctor -- --env-file /path/to/.env
 
 - `OPENCODE_BASE_URL` 是否为合法 `http(s)` 地址
 - `OPENCODE_PASSWORD` 是否已配置
-- `OPENCODE_MODEL` 格式是否为 `<provider>/<model_id>`
+- `OPENCODE_MODEL` 格式是否为 `<provider>/<model_id>[@<variant>]`
 - `FEISHU_MODE=long_conn` 时 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 是否齐全
 - 默认目录是否存在
 - SQLite 目录、附件缓存目录、备份目录是否可写
