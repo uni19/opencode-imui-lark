@@ -40,7 +40,7 @@ export function validateAppCfg(conf: AppCfg, env: NodeJS.ProcessEnv = process.en
   }
 
   if (env.OPENCODE_MODEL && !conf.opencode.model) {
-    add(errors, "OPENCODE_MODEL 格式应为 <provider>/<model_id>。")
+    add(errors, "OPENCODE_MODEL 格式应为 <provider>/<model_id>[@<variant>]。")
   }
 
   if (conf.feishu.mode === "long_conn") {

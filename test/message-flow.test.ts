@@ -435,7 +435,6 @@ describe("message flow", () => {
   })
 
   test("repo rebind keeps explicit session model override", async () => {
-
     const store = createMemoryStore()
     const task = createTaskSvc(store)
     const ui = feishu()
@@ -496,6 +495,437 @@ describe("message flow", () => {
       },
     })
     expect(ai.prompts[0]).not.toHaveProperty("agent")
+  })
+
+  test("repo rebind keeps explicit session model variant override", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+    })
+
+    const current = await route.resolve({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+    })
+    const updated = await route.model({
+      session_id: current.session_id,
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+    })
+    if (!updated) throw new Error("missing updated session")
+    const rebound = await route.bind({
+      session_id: updated.session_id,
+      directory: "/tmp/alt",
+      workspace_id: "ws_alt",
+    })
+    if (!rebound) throw new Error("missing rebound session")
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_model_variant_rebind", {
+        text: "切到新目录后继续",
+      }),
+    )
+
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]).toMatchObject({
+      session_id: rebound.session_id,
+      directory: "/tmp/alt",
+      workspace: "ws_alt",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+    })
+    expect(ai.prompts[0]).not.toHaveProperty("agent")
+  })
+
+  test("session switch preserves remote session model variant into the next prompt", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+    })
+
+    await route.resolve({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+    })
+
+    const switched = await route.switch({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+      session: {
+        id: "ses_remote",
+        title: "Remote",
+        directory: "/tmp/remote",
+        workspace_id: "ws_remote",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          variant: "fast",
+        },
+        created_at: 1,
+        updated_at: 1,
+      },
+    })
+
+    expect(switched).toMatchObject({
+      session_id: "ses_remote",
+      directory: "/tmp/remote",
+      workspace_id: "ws_remote",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_switch_variant", {
+        text: "继续处理",
+      }),
+    )
+
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]).toMatchObject({
+      session_id: "ses_remote",
+      directory: "/tmp/remote",
+      workspace: "ws_remote",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+    })
+  })
+
+  test("session switch prefers known local session model override over remote session model metadata", async () => {
+    const store = createMemoryStore()
+    const ai = opencode()
+    const conf = cfg()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+    })
+
+    await store.save_session({
+      id: "ims_known",
+      platform: "feishu",
+      tenant_id: "tenant_other",
+      chat_id: "chat_other",
+      user_id: "user_other",
+      session_id: "ses_remote",
+      directory: "/tmp/known",
+      workspace_id: "ws_known",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "max",
+      },
+      state: "active",
+      created_at: 1,
+      updated_at: 1,
+    })
+
+    await route.resolve({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+    })
+
+    const switched = await route.switch({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+      session: {
+        id: "ses_remote",
+        title: "Remote",
+        directory: "/tmp/remote",
+        workspace_id: "ws_remote",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          variant: "fast",
+        },
+        created_at: 1,
+        updated_at: 1,
+      },
+    })
+
+    expect(switched).toMatchObject({
+      session_id: "ses_remote",
+      directory: "/tmp/remote",
+      workspace_id: "ws_remote",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "max",
+      },
+    })
+  })
+
+  test("session switch keeps locally reset default model over stale remote session model metadata", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    await route.resolve({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+    })
+
+    await route.switch({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+      session: {
+        id: "ses_remote",
+        title: "Remote",
+        directory: "/tmp/remote",
+        workspace_id: "ws_remote",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          variant: "fast",
+        },
+        created_at: 1,
+        updated_at: 1,
+      },
+    })
+
+    const reset = await route.model({
+      session_id: "ses_remote",
+      model: conf.opencode.model,
+    })
+    expect(reset).toMatchObject({
+      session_id: "ses_remote",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+      },
+    })
+
+    await route.switch({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+      session: {
+        id: "ses_other",
+        title: "Other",
+        directory: "/tmp/other",
+        workspace_id: "ws_other",
+        model: {
+          providerID: "anthropic",
+          modelID: "claude-sonnet-4",
+          variant: "max",
+        },
+        created_at: 1,
+        updated_at: 1,
+      },
+    })
+
+    const switchedBack = await route.switch({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+      session: {
+        id: "ses_remote",
+        title: "Remote",
+        directory: "/tmp/remote",
+        workspace_id: "ws_remote",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          variant: "fast",
+        },
+        created_at: 1,
+        updated_at: 1,
+      },
+    })
+
+    expect(switchedBack).toMatchObject({
+      session_id: "ses_remote",
+      directory: "/tmp/remote",
+      workspace_id: "ws_remote",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+      },
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_switch_reset_default", {
+        text: "继续处理",
+      }),
+    )
+
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]).toMatchObject({
+      session_id: "ses_remote",
+      directory: "/tmp/remote",
+      workspace: "ws_remote",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+      },
+    })
+    expect(ai.prompts[0]?.model).not.toHaveProperty("variant")
+  })
+
+  test("message dispatch uses the pref-rehydrated current session without creating a new session", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    await store.save_session({
+      id: "ims_pref",
+      platform: "feishu",
+      tenant_id: "tenant",
+      chat_id: "chat",
+      user_id: "user",
+      session_id: "ses_1",
+      directory: "/tmp",
+      workspace_id: "ws_pref",
+      model: conf.opencode.model,
+      state: "active",
+      created_at: 1,
+      updated_at: 1,
+    })
+    await store.save_session_model_pref("ses_1", {
+      mode: "explicit",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_pref_current", {
+        text: "继续处理",
+      }),
+    )
+
+    expect(ai.ensures).toEqual([])
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]).toMatchObject({
+      session_id: "ses_1",
+      directory: "/tmp",
+      workspace: "ws_pref",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      session_id: "ses_1",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
   })
 
   test("reuses the same session and task for resumable follow-up", async () => {
@@ -1130,6 +1560,194 @@ describe("message flow", () => {
     expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
       session_id: "ses_2",
       state: "active",
+    })
+  })
+
+  test("pending new-session materialization preserves configured default model variant", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = {
+      ...cfg(),
+      opencode: {
+        ...cfg().opencode,
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          variant: "fast",
+        },
+      },
+    } satisfies AppCfg
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_variant_new_1", {
+        text: "/new",
+      }),
+    )
+
+    const pending = await store.get_session({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      thread_id: undefined,
+    })
+    expect(pending).toMatchObject({
+      session_id: expect.stringMatching(/^pending_new:/),
+      state: "pending_new",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_variant_new_2", {
+        text: "继续处理",
+      }),
+    )
+
+    expect(ai.ensures).toHaveLength(1)
+    expect(ai.ensures[0]).toMatchObject({
+      directory: "/tmp",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+    })
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]).toMatchObject({
+      session_id: "ses_1",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+    })
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      session_id: "ses_1",
+      state: "active",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+    })
+  })
+
+  test("pending new-session materialization moves explicit session model pref to the real session id", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    const pending = await route.reset({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+    })
+
+    await route.model({
+      session_id: pending.session_id,
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+
+    expect(await store.get_session_model_pref(pending.session_id)).toEqual({
+      mode: "explicit",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_pending_pref_materialize", {
+        text: "继续处理",
+      }),
+    )
+
+    expect(ai.ensures).toHaveLength(1)
+    expect(ai.ensures[0]).toMatchObject({
+      directory: "/tmp",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]).toMatchObject({
+      session_id: "ses_1",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+    expect(await store.get_session_model_pref(pending.session_id)).toBeNull()
+    expect(await store.get_session_model_pref("ses_1")).toEqual({
+      mode: "explicit",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      session_id: "ses_1",
+      state: "active",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
     })
   })
 

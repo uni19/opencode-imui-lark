@@ -213,8 +213,11 @@ async function saveWait(store: ReturnType<typeof createMemoryStore>, input: {
   await store.save_assistant_outbound(outbound)
 }
 
-function route() {
+function route(store: ReturnType<typeof createMemoryStore>) {
   return {
+    async current(input) {
+      return store.get_session(input)
+    },
     async resolve() {
       return session()
     },
@@ -811,7 +814,7 @@ describe("boot helpers", () => {
     const first = await on_cmd(
       "/session ses_wait",
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -827,7 +830,7 @@ describe("boot helpers", () => {
     const second = await on_cmd(
       "/session ses_wait",
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -2777,6 +2780,30 @@ describe("publish", () => {
 })
 
 describe("commands", () => {
+  test("/session does not auto-create when no current session exists", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const actual_route = createSessionSvc({
+      store,
+      opencode: ai,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    const ok = await on_cmd("/session", conf, actual_route, svc, store, ui.api, createRender(), ai, inbound({ text: "/session" }))
+
+    expect(ok).toBeTrue()
+    expect(ai.ensures).toEqual([])
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toBeNull()
+    const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("当前会话：未创建")
+    expect(text).toContain("模型：openai/gpt-5.4")
+  })
+
   test("/session shows current session with repo and model", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
@@ -2791,7 +2818,7 @@ describe("commands", () => {
       }),
     )
 
-    const ok = await on_cmd("/session", cfg(), route(), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/session" }))
+    const ok = await on_cmd("/session", cfg(), route(store), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/session" }))
 
     expect(ok).toBeTrue()
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
@@ -2799,6 +2826,54 @@ describe("commands", () => {
     expect(text).toContain("目录：/tmp (workspace=ws_1)")
     expect(text).toContain("模型：anthropic/claude-sonnet-4")
     expect(text).toContain("使用 /session <session_id> 切换当前会话。")
+  })
+
+  test("/session shows the pref-rehydrated current session model", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    await store.save_session(
+      session({
+        workspace_id: "ws_pref",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+        },
+      }),
+    )
+    await store.save_session_model_pref("ses_1", {
+      mode: "explicit",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+    const actual_route = createSessionSvc({
+      store,
+      opencode: ai,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    const ok = await on_cmd("/session", conf, actual_route, svc, store, ui.api, createRender(), ai, inbound({ text: "/session" }))
+
+    expect(ok).toBeTrue()
+    expect(ai.ensures).toEqual([])
+    const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("当前会话：ses_1")
+    expect(text).toContain("目录：/tmp (workspace=ws_pref)")
+    expect(text).toContain("模型：anthropic/claude-sonnet-4@max")
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
   })
 
   test("/session <id> switches and shows repo workspace and model", async () => {
@@ -2820,7 +2895,7 @@ describe("commands", () => {
       },
     } satisfies OpencodeSvc
 
-    const ok = await on_cmd("/session ses_alt", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/session ses_alt" }))
+    const ok = await on_cmd("/session ses_alt", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/session ses_alt" }))
 
     expect(ok).toBeTrue()
     expect(ui.list[0]?.out).toMatchObject({
@@ -2857,7 +2932,7 @@ describe("commands", () => {
       },
     } satisfies OpencodeSvc
 
-    const ok = await on_cmd("/session ses_alt", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/session ses_alt" }))
+    const ok = await on_cmd("/session ses_alt", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/session ses_alt" }))
 
     expect(ok).toBeTrue()
     expect(ui.list[0]?.out).toMatchObject({
@@ -2902,7 +2977,7 @@ describe("commands", () => {
       },
     } satisfies OpencodeSvc
 
-    const ok = await on_cmd("/session ses_wait", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/session ses_wait" }))
+    const ok = await on_cmd("/session ses_wait", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/session ses_wait" }))
 
     expect(ok).toBeTrue()
     expect(ui.list[0]?.kind).toBe("reply")
@@ -2962,7 +3037,7 @@ describe("commands", () => {
     const ok = await on_cmd(
       "/init --quick",
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -3024,6 +3099,90 @@ describe("commands", () => {
     expect(ui.list[ui.list.length - 1]?.kind).toBe("reply")
   })
 
+  test("slash command uses the pref-rehydrated current session model", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const conf = cfg()
+    await store.save_session(session({ workspace_id: "ws_cmd" }))
+    await store.save_session_model_pref("ses_1", {
+      mode: "explicit",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+      },
+    })
+    const oc = {
+      ...opencode(),
+      async commands(input?: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp",
+          workspace: "ws_cmd",
+        })
+        return [
+          {
+            name: "init",
+            description: "init repo",
+            hints: [],
+          },
+        ]
+      },
+      async command(input: {
+        session_id: string
+        command: string
+        arguments: string
+        directory?: string
+        workspace?: string
+        model?: { providerID: string; modelID: string; variant?: string }
+      }) {
+        expect(input).toMatchObject({
+          session_id: "ses_1",
+          command: "init",
+          arguments: "--quick",
+          directory: "/tmp",
+          workspace: "ws_cmd",
+          model: {
+            providerID: "anthropic",
+            modelID: "claude-sonnet-4",
+          },
+        })
+        return "已执行 /init。"
+      },
+    } satisfies OpencodeSvc
+    const actual_route = createSessionSvc({
+      store,
+      opencode: oc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    const ok = await on_cmd(
+      "/init --quick",
+      conf,
+      actual_route,
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({
+        id: "in_cmd_pref_model",
+        event_id: "evt_cmd_pref_model",
+        message_id: "msg_cmd_pref_model",
+        text: "/init --quick",
+      }),
+    )
+
+    expect(ok).toBeTrue()
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+      },
+    })
+  })
+
   test("/repo shows session over chat and user defaults", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
@@ -3044,7 +3203,7 @@ describe("commands", () => {
       workspace_id: "ws_user",
     })
 
-    const ok = await on_cmd("/repo", cfg(), route(), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/repo" }))
+    const ok = await on_cmd("/repo", cfg(), route(store), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/repo" }))
 
     expect(ok).toBeTrue()
     expect(ui.list[0]?.out).toMatchObject({
@@ -3067,7 +3226,7 @@ describe("commands", () => {
     const ok = await on_cmd(
       "/repo --chat /tmp/chat-next --workspace ws_chat_next",
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -3105,7 +3264,7 @@ describe("commands", () => {
     const ok = await on_cmd(
       "/repo --chat /tmp/chat-next",
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -3165,7 +3324,7 @@ describe("commands", () => {
       updated_at: 1,
     })
 
-    const ok = await on_cmd("/status", cfg(), route(), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/status" }))
+    const ok = await on_cmd("/status", cfg(), route(store), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/status" }))
 
     expect(ok).toBeTrue()
     expect(ui.list[0]?.out).toMatchObject({
@@ -3182,6 +3341,65 @@ describe("commands", () => {
     expect(text).toContain("聊天默认：/tmp/chat (workspace=ws_chat)")
     expect(text).toContain("用户默认：/tmp/user (workspace=ws_user)")
     expect(text).toContain("session: ses_1")
+  })
+
+  test("/status shows the pref-rehydrated current session model", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    await store.save_session(
+      session({
+        workspace_id: "ws_status",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+        },
+      }),
+    )
+    await store.save_session_model_pref("ses_1", {
+      mode: "explicit",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+    await store.set_conn({
+      name: "message",
+      status: "ready",
+      updated_at: 1,
+    })
+    await store.set_conn({
+      name: "opencode",
+      status: "ready",
+      updated_at: 1,
+    })
+    const actual_route = createSessionSvc({
+      store,
+      opencode: ai,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    const ok = await on_cmd("/status", conf, actual_route, svc, store, ui.api, createRender(), ai, inbound({ text: "/status" }))
+
+    expect(ok).toBeTrue()
+    expect(ai.ensures).toEqual([])
+    const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("目录：/tmp (workspace=ws_status)")
+    expect(text).toContain("当前模型：anthropic/claude-sonnet-4@max")
+    expect(text).toContain("默认模型：openai/gpt-5.4")
+    expect(text).toContain("session: ses_1")
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
   })
 
   test("/sessions uses current scope, locally filters exact workspace, and marks current session", async () => {
@@ -3251,7 +3469,7 @@ describe("commands", () => {
       },
     } satisfies OpencodeSvc
 
-    const ok = await on_cmd("/sessions", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/sessions" }))
+    const ok = await on_cmd("/sessions", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/sessions" }))
 
     expect(ok).toBeTrue()
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
@@ -3304,7 +3522,7 @@ describe("commands", () => {
       },
     } satisfies OpencodeSvc
 
-    const ok = await on_cmd("/sessions", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/sessions" }))
+    const ok = await on_cmd("/sessions", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/sessions" }))
 
     expect(ok).toBeTrue()
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
@@ -3364,7 +3582,7 @@ describe("commands", () => {
       },
     } satisfies OpencodeSvc
 
-    const ok = await on_cmd("/sessions", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/sessions" }))
+    const ok = await on_cmd("/sessions", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/sessions" }))
 
     expect(ok).toBeTrue()
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
@@ -3402,7 +3620,7 @@ describe("commands", () => {
       },
     } satisfies OpencodeSvc
 
-    const ok = await on_cmd("/workspaces", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/workspaces" }))
+    const ok = await on_cmd("/workspaces", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/workspaces" }))
 
     expect(ok).toBeTrue()
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
@@ -3423,7 +3641,7 @@ describe("commands", () => {
       },
     } satisfies OpencodeSvc
 
-    const ok = await on_cmd("/workspaces", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/workspaces" }))
+    const ok = await on_cmd("/workspaces", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/workspaces" }))
 
     expect(ok).toBeTrue()
     expect(ui.list[0]?.out).toMatchObject({
@@ -3487,7 +3705,7 @@ describe("commands", () => {
     const ok = await on_cmd(
       "/sessions",
       cfg({ workspace: "ws_default" }),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -4411,7 +4629,7 @@ describe("commands", () => {
       workspace_id: "ws_chat_default",
     })
     const svc_route = {
-      ...route(),
+      ...route(store),
       async reset() {
         return session({
           session_id: "ses_new",
@@ -4446,7 +4664,7 @@ describe("commands", () => {
       },
     } satisfies OpencodeSvc
 
-    const ok = await on_cmd("/new", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/new" }))
+    const ok = await on_cmd("/new", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/new" }))
 
     expect(ok).toBeTrue()
     expect((await store.get_task("tsk_1"))?.status).toBe("running")
@@ -4466,7 +4684,7 @@ describe("commands", () => {
     const ok = await on_cmd(
       "/repo --me /tmp/me-next --workspace ws_me_next",
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -4504,7 +4722,7 @@ describe("commands", () => {
     const ok = await on_cmd(
       "/repo --me /tmp/me-next",
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -4535,7 +4753,7 @@ describe("commands", () => {
     const ok = await on_cmd(
       "/repo --workspace ws_local",
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -4667,7 +4885,7 @@ describe("commands", () => {
       }),
     )
 
-    const ok = await on_cmd("/model", cfg(), route(), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/model" }))
+    const ok = await on_cmd("/model", cfg(), route(store), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/model" }))
 
     expect(ok).toBeTrue()
     expect(ui.list[0]?.out).toMatchObject({
@@ -4677,10 +4895,201 @@ describe("commands", () => {
           "当前模型：anthropic/claude-sonnet-4",
           "默认模型：openai/gpt-5.4",
           "session: ses_1",
-          "使用 /model <provider>/<model_id> 切换当前模型，或 /model reset 恢复默认。",
+          "可用 /models 查看 variants；去掉当前 variant：/model <provider>/<model_id>。",
+          "切换：/model <provider>/<model_id>[@<variant>]；重置：/model reset。",
         ].join("\n"),
       },
     })
+  })
+
+  test("/model shows the pref-rehydrated current session model", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    await store.save_session(
+      session({
+        workspace_id: "ws_model",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+        },
+      }),
+    )
+    await store.save_session_model_pref("ses_1", {
+      mode: "explicit",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+    const actual_route = createSessionSvc({
+      store,
+      opencode: ai,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+      model: conf.opencode.model,
+    })
+
+    const ok = await on_cmd("/model", conf, actual_route, svc, store, ui.api, createRender(), ai, inbound({ text: "/model" }))
+
+    expect(ok).toBeTrue()
+    expect(ai.ensures).toEqual([])
+    const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("当前模型：anthropic/claude-sonnet-4@max")
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+  })
+
+  test("/models shows visible variants and actionable footer", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ workspace_id: "ws_model" }))
+    const oc = {
+      ...opencode(),
+      async providers(input?: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp",
+          workspace: "ws_model",
+        })
+        return [
+          {
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            default_model: "gpt-5.4",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT 5.4",
+                variants: ["balanced", "fast"],
+              },
+              {
+                id: "gpt-4.1",
+                name: "gpt-4.1",
+              },
+            ],
+          },
+          {
+            id: "anthropic",
+            name: "Anthropic",
+            connected: true,
+            default_model: "claude-sonnet-4",
+            models: [
+              {
+                id: "claude-sonnet-4",
+                name: "Claude Sonnet 4",
+              },
+            ],
+          },
+        ]
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd("/models", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/models" }))
+
+    expect(ok).toBeTrue()
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: [
+          "当前目录 / workspace 下已连接 provider / model（共 2 项）：",
+          [
+            "1. OpenAI [connected]",
+            "provider: openai",
+            "default: gpt-5.4",
+            "models: GPT 5.4 (gpt-5.4) [variants: balanced, fast]、gpt-4.1",
+          ].join("\n"),
+          [
+            "2. Anthropic [connected]",
+            "provider: anthropic",
+            "default: claude-sonnet-4",
+            "models: Claude Sonnet 4 (claude-sonnet-4)",
+          ].join("\n"),
+          "",
+          "切换：/model <provider>/<model_id>[@<variant>]；重置：/model reset。",
+          "",
+          "去掉当前 variant：/model <provider>/<model_id>。",
+        ].join("\n\n"),
+      },
+    })
+  })
+
+  test("/models omits the variants footer when no variants are visible", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ workspace_id: "ws_model" }))
+    const oc = {
+      ...opencode(),
+      async providers(input?: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp",
+          workspace: "ws_model",
+        })
+        return [
+          {
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            default_model: "gpt-5.4",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT 5.4",
+              },
+              {
+                id: "gpt-4.1",
+                name: "gpt-4.1",
+              },
+            ],
+          },
+          {
+            id: "anthropic",
+            name: "Anthropic",
+            connected: true,
+            default_model: "claude-sonnet-4",
+            models: [
+              {
+                id: "claude-sonnet-4",
+                name: "Claude Sonnet 4",
+              },
+            ],
+          },
+        ]
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd("/models", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/models" }))
+
+    expect(ok).toBeTrue()
+    const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toEqual([
+      "当前目录 / workspace 下已连接 provider / model（共 2 项）：",
+      [
+        "1. OpenAI [connected]",
+        "provider: openai",
+        "default: gpt-5.4",
+        "models: GPT 5.4 (gpt-5.4)、gpt-4.1",
+      ].join("\n"),
+      [
+        "2. Anthropic [connected]",
+        "provider: anthropic",
+        "default: claude-sonnet-4",
+        "models: Claude Sonnet 4 (claude-sonnet-4)",
+      ].join("\n"),
+      "",
+      "切换：/model <provider>/<model_id>[@<variant>]；重置：/model reset。",
+    ].join("\n\n"))
+    expect(text).not.toContain("去掉当前 variant：/model <provider>/<model_id>。")
   })
 
   test("metadata listing commands query the current scope", async () => {
@@ -4718,7 +5127,7 @@ describe("commands", () => {
       const ok = await on_cmd(
         text,
         cfg(),
-        route(),
+        route(store),
         svc,
         store,
         ui.api,
@@ -4749,6 +5158,181 @@ describe("commands", () => {
     const svc = createTaskSvc(store)
     const ui = feishu()
     await store.save_session(session({ workspace_id: "ws_model" }))
+    const models_calls: Array<{ directory?: string; workspace?: string }> = []
+    const model_calls: Array<{ session_id: string; model?: { providerID: string; modelID: string; variant?: string }; mode?: "default" | "explicit" }> = []
+    const oc = {
+      ...opencode(),
+      async providers(input?: { directory?: string; workspace?: string }) {
+        models_calls.push(input ?? {})
+        return [
+          {
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            default_model: "gpt-5.4",
+            models: [{ id: "gpt-5.4", name: "gpt-5.4" }],
+          },
+        ]
+      },
+    } satisfies OpencodeSvc
+    const svc_route = {
+      ...route(store),
+      async model(input) {
+        model_calls.push(input)
+        return session({
+          session_id: input.session_id,
+          model: input.model,
+        })
+      },
+    } satisfies SessionSvc
+
+    const ok = await on_cmd("/model openai/gpt-5.4", cfg(), svc_route, svc, store, ui.api, createRender(), oc, inbound({ text: "/model openai/gpt-5.4" }))
+
+    expect(ok).toBeTrue()
+    expect(models_calls).toEqual([{ directory: "/tmp", workspace: "ws_model" }])
+    expect(model_calls).toEqual([
+      {
+        session_id: "ses_1",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+        },
+      },
+    ])
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: ["已切换当前模型。", "当前模型：openai/gpt-5.4", "session: ses_1"].join("\n"),
+      },
+    })
+  })
+
+  test("/model provider/model@variant switches current model variant", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ workspace_id: "ws_model" }))
+    const model_calls: Array<{ session_id: string; model?: { providerID: string; modelID: string; variant?: string }; mode?: "default" | "explicit" }> = []
+    const oc = {
+      ...opencode(),
+      async providers(input?: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp",
+          workspace: "ws_model",
+        })
+        return [
+          {
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            default_model: "gpt-5.4",
+            models: [{ id: "gpt-5.4", name: "gpt-5.4", variants: ["balanced", "fast"] }],
+          },
+        ]
+      },
+    } satisfies OpencodeSvc
+    const svc_route = {
+      ...route(store),
+      async model(input) {
+        model_calls.push(input)
+        return session({
+          session_id: input.session_id,
+          model: input.model,
+        })
+      },
+    } satisfies SessionSvc
+
+    const ok = await on_cmd("/model openai/gpt-5.4@fast", cfg(), svc_route, svc, store, ui.api, createRender(), oc, inbound({ text: "/model openai/gpt-5.4@fast" }))
+
+    expect(ok).toBeTrue()
+    expect(model_calls).toEqual([
+      {
+        session_id: "ses_1",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          variant: "fast",
+        },
+      },
+    ])
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: ["已切换当前模型。", "当前模型：openai/gpt-5.4@fast", "session: ses_1"].join("\n"),
+      },
+    })
+  })
+
+  test("/model provider/model clears an existing explicit variant override", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(
+      session({
+        workspace_id: "ws_model",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          variant: "fast",
+        },
+      }),
+    )
+    const model_calls: Array<{ session_id: string; model?: { providerID: string; modelID: string; variant?: string }; mode?: "default" | "explicit" }> = []
+    const oc = {
+      ...opencode(),
+      async providers(input?: { directory?: string; workspace?: string }) {
+        expect(input).toEqual({
+          directory: "/tmp",
+          workspace: "ws_model",
+        })
+        return [
+          {
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            default_model: "gpt-5.4",
+            models: [{ id: "gpt-5.4", name: "gpt-5.4", variants: ["balanced", "fast"] }],
+          },
+        ]
+      },
+    } satisfies OpencodeSvc
+    const svc_route = {
+      ...route(store),
+      async model(input) {
+        model_calls.push(input)
+        return session({
+          session_id: input.session_id,
+          model: input.model,
+        })
+      },
+    } satisfies SessionSvc
+
+    const ok = await on_cmd("/model openai/gpt-5.4", cfg(), svc_route, svc, store, ui.api, createRender(), oc, inbound({ text: "/model openai/gpt-5.4" }))
+
+    expect(ok).toBeTrue()
+    expect(model_calls).toEqual([
+      {
+        session_id: "ses_1",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+        },
+      },
+    ])
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: ["已切换当前模型。", "当前模型：openai/gpt-5.4", "session: ses_1"].join("\n"),
+      },
+    })
+  })
+
+  test("/model provider/model@variant accepts explicit variant when provider metadata omits variants list", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ workspace_id: "ws_model" }))
+    const model_calls: Array<{ session_id: string; model?: { providerID: string; modelID: string; variant?: string }; mode?: "default" | "explicit" }> = []
     const oc = {
       ...opencode(),
       async providers(input?: { directory?: string; workspace?: string }) {
@@ -4767,14 +5351,34 @@ describe("commands", () => {
         ]
       },
     } satisfies OpencodeSvc
+    const svc_route = {
+      ...route(store),
+      async model(input) {
+        model_calls.push(input)
+        return session({
+          session_id: input.session_id,
+          model: input.model,
+        })
+      },
+    } satisfies SessionSvc
 
-    const ok = await on_cmd("/model openai/gpt-5.4", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/model openai/gpt-5.4" }))
+    const ok = await on_cmd("/model openai/gpt-5.4@fast", cfg(), svc_route, svc, store, ui.api, createRender(), oc, inbound({ text: "/model openai/gpt-5.4@fast" }))
 
     expect(ok).toBeTrue()
+    expect(model_calls).toEqual([
+      {
+        session_id: "ses_1",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          variant: "fast",
+        },
+      },
+    ])
     expect(ui.list[0]?.out).toMatchObject({
       kind: "text",
       body: {
-        text: ["已切换当前模型。", "当前模型：openai/gpt-5.4", "session: ses_1"].join("\n"),
+        text: ["已切换当前模型。", "当前模型：openai/gpt-5.4@fast", "session: ses_1"].join("\n"),
       },
     })
   })
@@ -4784,13 +5388,43 @@ describe("commands", () => {
     const svc = createTaskSvc(store)
     const ui = feishu()
 
-    const ok = await on_cmd("/model badformat", cfg(), route(), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/model badformat" }))
+    const ok = await on_cmd("/model badformat", cfg(), route(store), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/model badformat" }))
 
     expect(ok).toBeTrue()
     expect(ui.list[0]?.out).toMatchObject({
       kind: "text",
       body: {
-        text: "模型格式应为 <provider>/<model_id>，例如 /model cba_openai/gpt-5.4",
+        text: "模型格式应为 <provider>/<model_id>[@<variant>]，例如 /model cba_openai/gpt-5.4@fast",
+      },
+    })
+  })
+
+  test("/model rejects unavailable variant target", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const oc = {
+      ...opencode(),
+      async providers() {
+        return [
+          {
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            default_model: "gpt-5.4",
+            models: [{ id: "gpt-5.4", name: "gpt-5.4", variants: ["balanced"] }],
+          },
+        ]
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd("/model openai/gpt-5.4@fast", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/model openai/gpt-5.4@fast" }))
+
+    expect(ok).toBeTrue()
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: "当前没有可用模型：openai/gpt-5.4@fast",
       },
     })
   })
@@ -4814,7 +5448,7 @@ describe("commands", () => {
       },
     } satisfies OpencodeSvc
 
-    const ok = await on_cmd("/model anthropic/claude-sonnet-4", cfg(), route(), svc, store, ui.api, createRender(), oc, inbound({ text: "/model anthropic/claude-sonnet-4" }))
+    const ok = await on_cmd("/model anthropic/claude-sonnet-4", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/model anthropic/claude-sonnet-4" }))
 
     expect(ok).toBeTrue()
     expect(ui.list[0]?.out).toMatchObject({
@@ -4838,9 +5472,60 @@ describe("commands", () => {
       }),
     )
 
-    const ok = await on_cmd("/model reset", cfg(), route(), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/model reset" }))
+    const ok = await on_cmd("/model reset", cfg(), route(store), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/model reset" }))
 
     expect(ok).toBeTrue()
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: [
+          "已恢复默认模型。",
+          "当前模型：openai/gpt-5.4",
+          "session: ses_1",
+        ].join("\n"),
+      },
+    })
+  })
+
+  test("/model reset persists the configured default model into session state", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(
+      session({
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          variant: "fast",
+        },
+      }),
+    )
+
+    const model_calls: Array<{ session_id: string; model?: { providerID: string; modelID: string; variant?: string }; mode?: "default" | "explicit" }> = []
+    const svc_route = {
+      ...route(store),
+      async model(input) {
+        model_calls.push(input)
+        return session({
+          session_id: input.session_id,
+          model: input.model,
+        })
+      },
+    } satisfies SessionSvc
+
+    const ok = await on_cmd("/model reset", cfg(), svc_route, svc, store, ui.api, createRender(), opencode(), inbound({ text: "/model reset" }))
+
+    expect(ok).toBeTrue()
+    expect(model_calls).toEqual([
+      {
+        session_id: "ses_1",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+        },
+        mode: "default",
+      },
+    ])
     expect(ui.list[0]?.out).toMatchObject({
       kind: "text",
       body: {
@@ -4904,7 +5589,7 @@ describe("commands", () => {
 
     await on_msg(
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -4994,7 +5679,7 @@ describe("commands", () => {
 
     await on_msg(
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -5066,7 +5751,7 @@ describe("commands", () => {
 
     await on_msg(
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -5123,7 +5808,7 @@ describe("commands", () => {
 
     await on_msg(
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -5173,7 +5858,7 @@ describe("commands", () => {
 
     await on_msg(
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -5216,7 +5901,7 @@ describe("commands", () => {
 
     await on_msg(
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -5285,7 +5970,7 @@ describe("commands", () => {
 
     await on_msg(
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -5357,7 +6042,7 @@ describe("commands", () => {
 
     await on_msg(
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -5416,7 +6101,7 @@ describe("commands", () => {
 
     await on_msg(
       cfg(),
-      route(),
+      route(store),
       svc,
       store,
       ui.api,
@@ -5513,7 +6198,7 @@ test("next queued approval is sent only after correction prompt succeeds", async
 
   const pending = on_msg(
     cfg(),
-    route(),
+    route(store),
     svc,
     store,
     ui.api,

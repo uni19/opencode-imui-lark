@@ -92,6 +92,13 @@ describe("parseCmd", () => {
     })
   })
 
+  test("parses model target with variant", () => {
+    expect(parseCmd("/model openai/gpt-5.4@fast")).toEqual({
+      name: "model",
+      arg: "openai/gpt-5.4@fast",
+    })
+  })
+
   test("falls through to slash forwarding", () => {
     expect(parseCmd("/init hello world")).toEqual({
       name: "slash",

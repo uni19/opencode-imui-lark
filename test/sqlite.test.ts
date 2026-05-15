@@ -376,6 +376,71 @@ describe("sqlite store", () => {
     await c.close?.()
   })
 
+  test("persists session model prefs across reopen", async () => {
+    const db = file()
+    const a = createSqliteStore(db)
+
+    await a.save_session_model_pref("ses_default", { mode: "default" })
+    await a.save_session_model_pref("ses_explicit", {
+      mode: "explicit",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+    })
+    await a.close?.()
+
+    const b = createSqliteStore(db)
+    expect(await b.get_session_model_pref("ses_default")).toEqual({ mode: "default" })
+    expect(await b.get_session_model_pref("ses_explicit")).toEqual({
+      mode: "explicit",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+    })
+    await b.close?.()
+  })
+
+  test("moves a session model pref from pending session id to real session id across reopen", async () => {
+    const db = file()
+    const a = createSqliteStore(db)
+
+    await a.save_session_model_pref("pending_new:ses_placeholder", {
+      mode: "explicit",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+    await a.move_session_model_pref("pending_new:ses_placeholder", "ses_real")
+    expect(await a.get_session_model_pref("pending_new:ses_placeholder")).toBeNull()
+    expect(await a.get_session_model_pref("ses_real")).toEqual({
+      mode: "explicit",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+    await a.close?.()
+
+    const b = createSqliteStore(db)
+    expect(await b.get_session_model_pref("pending_new:ses_placeholder")).toBeNull()
+    expect(await b.get_session_model_pref("ses_real")).toEqual({
+      mode: "explicit",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "max",
+      },
+    })
+    await b.close?.()
+  })
+
   test("keeps only the latest session mapping", async () => {
     const db = createSqliteStore(file())
     const old = session({

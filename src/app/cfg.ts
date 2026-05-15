@@ -2,6 +2,25 @@ import type { AppCfg, OpencodeModel } from "../contracts.js"
 import path from "node:path"
 import { configDir, dataDir } from "./env.js"
 
+export function parseOpencodeModel(val?: string): OpencodeModel | undefined {
+  const input = val?.trim()
+  if (!input) return
+  const slash = input.indexOf("/")
+  if (slash <= 0) return
+  const providerID = input.slice(0, slash)
+  const rest = input.slice(slash + 1)
+  if (!rest) return
+  const at = rest.lastIndexOf("@")
+  const modelID = at > 0 ? rest.slice(0, at) : rest
+  const variant = at > 0 ? rest.slice(at + 1) : undefined
+  if (!providerID || !modelID || (at > 0 && !variant)) return
+  return {
+    providerID,
+    modelID,
+    ...(variant ? { variant } : {}),
+  }
+}
+
 function base() {
   return configDir()
 }
@@ -25,11 +44,7 @@ function mode() {
 }
 
 function model(): OpencodeModel | undefined {
-  const val = process.env.OPENCODE_MODEL
-  if (!val) return
-  const [providerID, modelID] = val.split("/", 2)
-  if (!providerID || !modelID) return
-  return { providerID, modelID }
+  return parseOpencodeModel(process.env.OPENCODE_MODEL)
 }
 
 function dir(val?: string) {

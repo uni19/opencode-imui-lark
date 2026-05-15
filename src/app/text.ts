@@ -56,7 +56,7 @@ export function repo(dir?: string, workspace?: string) {
 
 export function model(val?: OpencodeModel) {
   if (!val) return "未设置"
-  return `${val.providerID}/${val.modelID}`
+  return val.variant ? `${val.providerID}/${val.modelID}@${val.variant}` : `${val.providerID}/${val.modelID}`
 }
 
 export function qmeta(note?: string) {

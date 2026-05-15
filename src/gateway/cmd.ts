@@ -67,7 +67,7 @@ export function parseCmd(text: string): Cmd | null {
   if (head === "/skills") return { name: "skills" }
   if (head === "/commands") return { name: "commands" }
   if (head === "/agents") return { name: "agents" }
-  if (head === "/model") return { name: "model", arg: tail[0] }
+  if (head === "/model") return { name: "model", arg: tail.join(" ") || undefined }
   if (head === "/models") return { name: "models" }
   if (head === "/mcps") return { name: "mcps" }
   if (head === "/repo") return repo(tail)

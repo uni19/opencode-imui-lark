@@ -76,7 +76,7 @@ describe("validate app cfg", () => {
       expect(out.errors).toContain(`OPENCODE_DIRECTORY 不存在：${path.join(root, "missing")}`)
       expect(out.errors).toContain("IMUI_ASSET_TTL_HOURS 必须大于等于 1。")
       expect(out.errors).toContain("IMUI_BACKUP_RETENTION_DAYS 必须大于等于 1。")
-      expect(out.errors).toContain("OPENCODE_MODEL 格式应为 <provider>/<model_id>。")
+      expect(out.errors).toContain("OPENCODE_MODEL 格式应为 <provider>/<model_id>[@<variant>]。")
     } finally {
       await rm(root, { recursive: true, force: true })
     }

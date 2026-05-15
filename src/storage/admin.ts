@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises"
 import path from "node:path"
 import { Database } from "bun:sqlite"
 
-export const DB_SCHEMA_VERSION = 2
+export const DB_SCHEMA_VERSION = 3
 
 function ensure(file: string) {
   if (file === ":memory:") return file
@@ -33,6 +33,12 @@ export function schema(db: Database) {
 
     CREATE INDEX IF NOT EXISTS im_session_lookup_idx
     ON im_session (tenant_id, chat_id, thread_id);
+
+    CREATE TABLE IF NOT EXISTS session_model_pref (
+      opencode_session_id TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS repo_pref (
       pref_key TEXT PRIMARY KEY,

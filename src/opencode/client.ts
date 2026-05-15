@@ -75,6 +75,7 @@ function session(item: Record<string, unknown>): OpencodeSession {
     directory: String(item.directory ?? ""),
     workspace_id: typeof item.workspaceID === "string" ? item.workspaceID : undefined,
     parent_id: typeof item.parentID === "string" ? item.parentID : undefined,
+    ...(model_ref(item.model) ? { model: model_ref(item.model) } : {}),
     created_at:
       item.time && typeof item.time === "object" && "created" in item.time ? Number(item.time.created ?? 0) : 0,
     updated_at:
@@ -112,6 +113,31 @@ function workspace(item: Record<string, unknown>): OpencodeWorkspace {
     branch,
     current,
   } satisfies OpencodeWorkspace
+}
+
+function model_ref(item: unknown) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return
+  const model = item as Record<string, unknown>
+  const providerID = typeof model.providerID === "string" ? model.providerID : undefined
+  const modelID =
+    typeof model.modelID === "string"
+      ? model.modelID
+      : typeof model.id === "string"
+        ? model.id
+        : undefined
+  if (!providerID || !modelID) return
+  return {
+    providerID,
+    modelID,
+    ...(typeof model.variant === "string" ? { variant: model.variant } : {}),
+  }
+}
+
+function model_variants(info: Record<string, unknown>) {
+  if (!info.variants || typeof info.variants !== "object" || Array.isArray(info.variants)) return
+  const variants = Object.keys(info.variants as Record<string, unknown>).sort((a, b) => a.localeCompare(b))
+  if (variants.length === 0) return
+  return variants
 }
 
 function text(parts: unknown) {
@@ -245,7 +271,17 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
   return {
     async ensure(input) {
       if (input.session_id) return { id: input.session_id }
-      const data = await req(cfg, "POST", "/session" + seeded(cfg, input), {})
+      const data = await req(cfg, "POST", "/session" + seeded(cfg, input), {
+        ...(input.model
+          ? {
+              model: {
+                id: input.model.modelID,
+                providerID: input.model.providerID,
+                ...(input.model.variant ? { variant: input.model.variant } : {}),
+              },
+            }
+          : {}),
+      })
       const id = (data as { id?: string }).id
       if (!id) throw new Error("opencode session.create returned no id")
       return { id }
@@ -336,13 +372,15 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
           description: typeof item.description === "string" ? item.description : undefined,
           mode: item.mode === "subagent" || item.mode === "all" ? item.mode : "primary",
           hidden: typeof item.hidden === "boolean" ? item.hidden : undefined,
-          model:
-            item.model && typeof item.model === "object"
-              ? {
-                  provider_id: String((item.model as Record<string, unknown>).providerID ?? ""),
-                  model_id: String((item.model as Record<string, unknown>).modelID ?? ""),
-                }
-              : undefined,
+          model: (() => {
+            const model = model_ref(item.model)
+            if (!model) return undefined
+            return {
+              provider_id: model.providerID,
+              model_id: model.modelID,
+              ...(model.variant ? { variant: model.variant } : {}),
+            }
+          })(),
         } satisfies OpencodeAgent))
         .filter((item) => !!item.name && !item.hidden)
     },
@@ -364,15 +402,19 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
           connected: connected.includes(String(item.id ?? "")),
           default_model: typeof defaults[String(item.id ?? "")] === "string" ? String(defaults[String(item.id ?? "")]) : undefined,
           models:
-            item.models && typeof item.models === "object"
+            item.models && typeof item.models === "object" && !Array.isArray(item.models)
               ? Object.entries(item.models as Record<string, unknown>)
-                  .filter((entry): entry is [string, Record<string, unknown>] => !!entry[1] && typeof entry[1] === "object")
-                  .map(([id, info]) => ({
-                    id,
-                    name: typeof info.name === "string" ? info.name : id,
-                  }))
-              : [],
-        } satisfies OpencodeProvider))
+                   .filter((entry): entry is [string, Record<string, unknown>] => !!entry[1] && typeof entry[1] === "object")
+                   .map(([id, info]) => {
+                     const variants = model_variants(info)
+                     return {
+                       id,
+                       name: typeof info.name === "string" ? info.name : id,
+                       ...(variants ? { variants } : {}),
+                     }
+                   })
+               : [],
+         } satisfies OpencodeProvider))
         .filter((item) => !!item.id)
       const active = list.filter((item) => item.connected)
       return active.length > 0 ? active : list
@@ -409,7 +451,15 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
         `/session/${input.session_id}/prompt_async` + scoped(input),
         {
           ...(input.agent ? { agent: input.agent } : {}),
-          ...(input.model ? { model: input.model } : {}),
+          ...(input.model
+            ? {
+                model: {
+                  providerID: input.model.providerID,
+                  modelID: input.model.modelID,
+                },
+                ...(input.model.variant ? { variant: input.model.variant } : {}),
+              }
+            : {}),
           parts,
         },
       )
@@ -440,6 +490,12 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
       const data = await req(cfg, "POST", `/session/${input.session_id}/command` + scoped(input), {
         command: input.command,
         arguments: input.arguments,
+        ...(input.model
+          ? {
+              model: `${input.model.providerID}/${input.model.modelID}`,
+              ...(input.model.variant ? { variant: input.model.variant } : {}),
+            }
+          : {}),
       })
       return output(data)
     },

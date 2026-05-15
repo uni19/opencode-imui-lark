@@ -214,7 +214,17 @@ export type RenderOut = {
 export type OpencodeModel = {
   providerID: string
   modelID: string
+  variant?: string
 }
+
+export type SessionModelPref =
+  | {
+      mode: "default"
+    }
+  | {
+      mode: "explicit"
+      model: OpencodeModel
+    }
 
 export type OpencodeEvent = {
   type: string
@@ -227,6 +237,7 @@ export type OpencodeSession = {
   directory: string
   workspace_id?: string
   parent_id?: string
+  model?: OpencodeModel
   created_at: number
   updated_at: number
 }
@@ -274,6 +285,7 @@ export type OpencodeAgent = {
   model?: {
     provider_id: string
     model_id: string
+    variant?: string
   }
 }
 
@@ -285,6 +297,7 @@ export type OpencodeProvider = {
   models: Array<{
     id: string
     name: string
+    variants?: string[]
   }>
 }
 
@@ -367,6 +380,7 @@ export type Queue = {
 }
 
 export type SessionSvc = {
+  current(input: { tenant_id: string; chat_id: string; thread_id?: string }): Promise<ImSession | null>
   resolve(input: {
     tenant_id: string
     chat_id: string
@@ -393,7 +407,7 @@ export type SessionSvc = {
     session: OpencodeSession
   }): Promise<ImSession>
   bind(input: { session_id: string; directory?: string; workspace_id?: string }): Promise<ImSession | null>
-  model(input: { session_id: string; model?: OpencodeModel }): Promise<ImSession | null>
+  model(input: { session_id: string; model?: OpencodeModel; mode?: SessionModelPref["mode"] }): Promise<ImSession | null>
 }
 
 export type TaskSvc = {
@@ -437,7 +451,7 @@ export type TaskSvc = {
 }
 
 export type OpencodeSvc = {
-  ensure(input: { directory?: string; workspace?: string; session_id?: string }): Promise<{ id: string }>
+  ensure(input: { directory?: string; workspace?: string; session_id?: string; model?: OpencodeModel }): Promise<{ id: string }>
   session(id: string): Promise<OpencodeSession | null>
   sessions(input: { directory?: string; workspace?: string; limit?: number; roots?: boolean }): Promise<OpencodeSession[]>
   workspaces(input?: { directory?: string }): Promise<OpencodeWorkspace[]>
@@ -466,6 +480,7 @@ export type OpencodeSvc = {
     arguments: string
     directory?: string
     workspace?: string
+    model?: OpencodeModel
   }): Promise<string | undefined>
   result?(input: { session_id: string; directory?: string; workspace?: string }): Promise<OpencodeResult>
   last(input: { session_id: string; directory?: string; workspace?: string }): Promise<string | undefined>
@@ -490,6 +505,9 @@ export type Store = {
   get_session(input: { tenant_id: string; chat_id: string; thread_id?: string }): Promise<ImSession | null>
   get_session_by_opencode(session_id: string): Promise<ImSession | null>
   save_session(input: ImSession): Promise<void>
+  get_session_model_pref(session_id: string): Promise<SessionModelPref | null>
+  save_session_model_pref(session_id: string, input: SessionModelPref): Promise<void>
+  move_session_model_pref(from_session_id: string, to_session_id: string): Promise<void>
   get_pref(input: { scope: "chat" | "user"; tenant_id: string; chat_id?: string; user_id?: string }): Promise<RepoPref | null>
   save_pref(input: RepoPref): Promise<void>
   save_task(input: Task): Promise<void>

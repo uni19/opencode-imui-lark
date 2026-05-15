@@ -25,7 +25,7 @@ import type {
   Task,
   TaskSvc,
 } from "../contracts.js"
-import { cfg } from "./cfg.js"
+import { cfg, parseOpencodeModel } from "./cfg.js"
 import { createSqliteStore } from "../storage/db.js"
 import { cleanupDir } from "../storage/cleanup.js"
 import { createRender } from "../render/text.js"
@@ -174,7 +174,7 @@ function help() {
     "示例：/session ses_xxx",
     "示例：/agents",
     "示例：/models",
-    "示例：/model provider/model",
+    "示例：/model provider/model@variant",
     "示例：/model reset",
     "示例：/mcps",
     "示例：/commands",
@@ -1264,41 +1264,67 @@ function agents(list: OpencodeAgent[]) {
   return [
     `当前目录 / workspace 下 Agent 列表（共 ${list.length} 项）：`,
     ...list.map((item, i) =>
-      `${i + 1}. ${item.name} [${item.mode}]${item.model ? ` ${item.model.provider_id}/${item.model.model_id}` : ""}${item.description ? ` - ${item.description}` : ""}`,
+      `${i + 1}. ${item.name} [${item.mode}]${item.model ? ` ${item.model.provider_id}/${item.model.model_id}${item.model.variant ? `@${item.model.variant}` : ""}` : ""}${item.description ? ` - ${item.description}` : ""}`,
     ),
   ].join("\n")
 }
+
+const model_variants_footer = "去掉当前 variant：/model <provider>/<model_id>。"
+const model_variants_help = "可用 /models 查看 variants；去掉当前 variant：/model <provider>/<model_id>。"
 
 function models(list: OpencodeProvider[]) {
   if (list.length === 0) return "当前目录 / workspace 下没有已连接 provider。"
 
   const label = (item: OpencodeProvider["models"][number]) => {
-    if (item.name === item.id) return item.id
-    return `${item.name} (${item.id})`
+    const base = item.name === item.id ? item.id : `${item.name} (${item.id})`
+    if (!item.variants || item.variants.length === 0) {
+      return {
+        text: base,
+        has_variants: false,
+      }
+    }
+    return {
+      text: `${base} [variants: ${item.variants.join(", ")}]`,
+      has_variants: true,
+    }
   }
 
   const names = (items: OpencodeProvider["models"]) => {
-    if (items.length === 0) return "-"
-    if (items.length <= 8) return items.map(label).join("、")
-    return items
-      .slice(0, 8)
-      .map(label)
-      .concat(`等 ${items.length} 个`)
-      .join("、")
+    if (items.length === 0) return { text: "-", has_variants: false }
+    const shown = items.length <= 8 ? items : items.slice(0, 8)
+    const labels = shown.map(label)
+    return {
+      text:
+        items.length <= 8
+          ? labels.map((item) => item.text).join("、")
+          : labels
+              .map((item) => item.text)
+              .concat(`等 ${items.length} 个`)
+              .join("、"),
+      has_variants: labels.some((item) => item.has_variants),
+    }
   }
 
-  return [
-    `当前目录 / workspace 下已连接 provider / model（共 ${list.length} 项）：`,
-    ...list.map((item, i) =>
-      [
+  const sections = list.map((item, i) => {
+    const listed = names(item.models)
+    return {
+      text: [
         `${i + 1}. ${item.name}${item.connected ? " [connected]" : ""}`,
         `provider: ${item.id}`,
         `default: ${item.default_model ?? "-"}`,
-        `models: ${names(item.models)}`,
+        `models: ${listed.text}`,
       ].join("\n"),
-    ),
+      has_variants: listed.has_variants,
+    }
+  })
+  const has_variants = sections.some((item) => item.has_variants)
+
+  return [
+    `当前目录 / workspace 下已连接 provider / model（共 ${list.length} 项）：`,
+    ...sections.map((item) => item.text),
     "",
-    "使用 /model <provider>/<model_id> 切换当前模型，或 /model reset 恢复默认。",
+    "切换：/model <provider>/<model_id>[@<variant>]；重置：/model reset。",
+    ...(has_variants ? ["", model_variants_footer] : []),
   ].join("\n\n")
 }
 
@@ -2707,7 +2733,7 @@ export async function on_cmd(
     return true
   }
 
-  const current = await store.get_session({
+  const current = await route.current({
     tenant_id: inbound.tenant_id,
     chat_id: inbound.chat_id,
     thread_id: inbound.thread_id,
@@ -2955,7 +2981,13 @@ export async function on_cmd(
         out: {
           kind: "text",
           body: {
-            text: [`当前模型：${model(current?.model ?? conf.opencode.model)}`, `默认模型：${model(conf.opencode.model)}`, `session: ${session_label(current)}`, "使用 /model <provider>/<model_id> 切换当前模型，或 /model reset 恢复默认。"].join("\n"),
+            text: [
+              `当前模型：${model(current?.model ?? conf.opencode.model)}`,
+              `默认模型：${model(conf.opencode.model)}`,
+              `session: ${session_label(current)}`,
+              model_variants_help,
+              "切换：/model <provider>/<model_id>[@<variant>]；重置：/model reset。",
+            ].join("\n"),
           },
         },
       })
@@ -2992,7 +3024,8 @@ export async function on_cmd(
     if (cmd.arg === "reset") {
       await route.model({
         session_id: item.session_id,
-        model: undefined,
+        model: conf.opencode.model,
+        mode: "default",
       })
       await feishu.reply({
         msg_id: inbound.message_id,
@@ -3006,28 +3039,28 @@ export async function on_cmd(
       return true
     }
 
-    const at = cmd.arg.indexOf("/")
-    const pid = at > 0 ? cmd.arg.slice(0, at) : ""
-    const mid = at > 0 ? cmd.arg.slice(at + 1) : ""
-    if (!pid || !mid) {
+    const target = parseOpencodeModel(cmd.arg)
+    if (!target) {
       await feishu.reply({
         msg_id: inbound.message_id,
         out: {
           kind: "text",
-          body: { text: "模型格式应为 <provider>/<model_id>，例如 /model cba_openai/gpt-5.4" },
+          body: { text: "模型格式应为 <provider>/<model_id>[@<variant>]，例如 /model cba_openai/gpt-5.4@fast" },
         },
       })
       return true
     }
 
     const list = await opencode.providers(base)
-    const hit = list.find((item) => item.id === pid)
-    if (!hit || !hit.models.some((item) => item.id === mid)) {
+    const hit = list.find((item) => item.id === target.providerID)
+    const selected = hit?.models.find((item) => item.id === target.modelID)
+    const variant_ok = !target.variant || !selected?.variants || selected.variants.includes(target.variant)
+    if (!selected || !variant_ok) {
       await feishu.reply({
         msg_id: inbound.message_id,
         out: {
           kind: "text",
-          body: { text: `当前没有可用模型：${pid}/${mid}` },
+          body: { text: `当前没有可用模型：${model(target)}` },
         },
       })
       return true
@@ -3035,17 +3068,14 @@ export async function on_cmd(
 
     await route.model({
       session_id: item.session_id,
-      model: {
-        providerID: pid,
-        modelID: mid,
-      },
+      model: target,
     })
     await feishu.reply({
       msg_id: inbound.message_id,
       out: {
         kind: "text",
         body: {
-          text: [`已切换当前模型。`, `当前模型：${pid}/${mid}`, `session: ${session_label(item)}`].join("\n"),
+          text: [`已切换当前模型。`, `当前模型：${model(target)}`, `session: ${session_label(item)}`].join("\n"),
         },
       },
     })
@@ -3394,6 +3424,7 @@ export async function on_cmd(
         arguments: cmd.arguments,
         directory: item.directory,
         workspace: item.workspace_id,
+        ...(item.model ? { model: item.model } : {}),
       })
       .then(async (val) => {
         const out = render.final({
@@ -3605,9 +3636,10 @@ export async function on_progress(
     if (!row || !active(row.status)) return false
     const to = await dest(store, row, session_id)
     if (!to) return false
-    const info = event.properties.info as { role?: string; agent?: string; modelID?: string } | undefined
+    const info = event.properties.info as { role?: string; agent?: string; modelID?: string; variant?: string } | undefined
     if (info?.role !== "assistant") return false
-    const title = [info.agent, info.modelID].filter(Boolean).join(" / ")
+    const model_name = info?.modelID ? `${info.modelID}${info.variant ? `@${info.variant}` : ""}` : undefined
+    const title = [info.agent, model_name].filter(Boolean).join(" / ")
     await once(store, event, row, async () => {
       await task.note({
         id: row.id,
@@ -3802,7 +3834,7 @@ export async function on_msg(
   inbound: InboundMessage,
 ) {
   const val = body(inbound)
-  const current = await store.get_session({
+  const current = await route.current({
     tenant_id: inbound.tenant_id,
     chat_id: inbound.chat_id,
     thread_id: inbound.thread_id,
@@ -4256,6 +4288,7 @@ export function createApp(conf = cfg()): App {
     opencode,
     directory: conf.opencode.directory,
     workspace: conf.opencode.workspace,
+    model: conf.opencode.model,
   })
   const task = createTaskSvc(store)
   const tick = createTick(store, task, feishu)

@@ -9,6 +9,7 @@ import type {
   PendingAttachment,
   QueueJob,
   RepoPref,
+  SessionModelPref,
   Store,
   Task,
 } from "../contracts.js"
@@ -64,6 +65,7 @@ function taskPendingFromLegacy(task: Task, legacy: Pending, origin_message_id?: 
 export function createMemoryStore(): Store {
   const sessionByMapKey = new Map<string, ImSession>()
   const sessionByOpencodeId = new Map<string, ImSession>()
+  const sessionModelPrefs = new Map<string, SessionModelPref>()
   const prefs = new Map<string, RepoPref>()
   const tasks = new Map<string, Task>()
   const inboundEvents = new Map<string, InboundEvent>()
@@ -95,6 +97,22 @@ export function createMemoryStore(): Store {
       }
       sessionByMapKey.set(mapKey, input)
       sessionByOpencodeId.set(input.session_id, input)
+    },
+
+    async get_session_model_pref(session_id) {
+      return sessionModelPrefs.get(session_id) ?? null
+    },
+
+    async save_session_model_pref(session_id, input) {
+      sessionModelPrefs.set(session_id, input)
+    },
+
+    async move_session_model_pref(from_session_id, to_session_id) {
+      if (from_session_id === to_session_id) return
+      const hit = sessionModelPrefs.get(from_session_id)
+      if (!hit) return
+      sessionModelPrefs.set(to_session_id, hit)
+      sessionModelPrefs.delete(from_session_id)
     },
 
     async get_pref(input) {
@@ -329,6 +347,19 @@ export function createSqliteStore(file: string): Store {
     `,
   )
   const dropSessionStmt = db.query("delete from im_session where opencode_session_id = ?1")
+  const getSessionModelPrefStmt = db.query<{ data: string }, [string]>(
+    "select data from session_model_pref where opencode_session_id = ?1 limit 1",
+  )
+  const saveSessionModelPrefStmt = db.query(
+    `
+      insert into session_model_pref (opencode_session_id, data, updated_at)
+      values (?1, ?2, ?3)
+      on conflict(opencode_session_id) do update set
+        data = excluded.data,
+        updated_at = excluded.updated_at
+    `,
+  )
+  const dropSessionModelPrefStmt = db.query("delete from session_model_pref where opencode_session_id = ?1")
   const getPrefStmt = db.query<{ data: string }, [string]>("select data from repo_pref where pref_key = ?1 limit 1")
   const savePrefStmt = db.query(
     `
@@ -546,6 +577,23 @@ export function createSqliteStore(file: string): Store {
         text(input),
         input.updated_at,
       )
+    },
+
+    async get_session_model_pref(session_id) {
+      return parse<SessionModelPref>(getSessionModelPrefStmt.get(session_id)?.data ?? null)
+    },
+
+    async save_session_model_pref(session_id, input) {
+      if (!live) return
+      saveSessionModelPrefStmt.run(session_id, text(input), Date.now())
+    },
+
+    async move_session_model_pref(from_session_id, to_session_id) {
+      if (!live || from_session_id === to_session_id) return
+      const hit = getSessionModelPrefStmt.get(from_session_id)?.data ?? null
+      if (!hit) return
+      saveSessionModelPrefStmt.run(to_session_id, hit, Date.now())
+      dropSessionModelPrefStmt.run(from_session_id)
     },
 
     async get_pref(input) {

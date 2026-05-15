@@ -428,6 +428,46 @@ describe("opencode client", () => {
     })
   })
 
+  test("prompt forwards explicit model variant when caller provides it", async () => {
+    const capture: { body?: Record<string, unknown> | null } = {}
+    globalThis.fetch = Object.assign(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        capture.body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        })
+      },
+      {
+        preconnect: fetch0.preconnect.bind(fetch0),
+      },
+    )
+
+    const svc = createOpencodeSvc(cfg())
+    await svc.prompt({
+      session_id: "ses_1",
+      text: "hello",
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+        variant: "thinking",
+      },
+    })
+
+    const requestBody = capture.body
+    if (!requestBody) throw new Error("expected prompt request body")
+    expect(requestBody).toEqual({
+      model: {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+      },
+      variant: "thinking",
+      parts: [{ type: "text", text: "hello" }],
+    })
+  })
+
   test("prompt forwards explicit agent override when caller provides it", async () => {
     const capture: { body?: Record<string, unknown> | null } = {}
     globalThis.fetch = Object.assign(
@@ -528,6 +568,222 @@ describe("opencode client", () => {
       { path: "/agent", directory: "/tmp/override-scope", workspace: "ws_override" },
       { path: "/provider", directory: "/tmp/override-scope", workspace: "ws_override" },
       { path: "/mcp", directory: "/tmp/override-scope", workspace: "ws_override" },
+    ])
+  })
+
+  test("ensure forwards nested model variant when caller provides it", async () => {
+    const capture: { url?: string; body?: Record<string, unknown> | null } = {}
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        capture.url = String(input)
+        capture.body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null
+        return new Response(JSON.stringify({ id: "ses_new" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        })
+      },
+      {
+        preconnect: fetch0.preconnect.bind(fetch0),
+      },
+    )
+
+    const svc = createOpencodeSvc(cfg())
+    expect(
+      await svc.ensure({
+        directory: "/tmp/project",
+        workspace: "ws_local",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          variant: "fast",
+        },
+      }),
+    ).toEqual({ id: "ses_new" })
+    expect(capture.url).toContain('/session?directory=%2Ftmp%2Fproject&workspace=ws_local')
+    expect(capture.body).toEqual({
+      model: {
+        id: "gpt-5.4",
+        providerID: "openai",
+        variant: "fast",
+      },
+    })
+  })
+
+  test("command forwards top-level variant and provider/model string", async () => {
+    const capture: { url?: string; body?: Record<string, unknown> | null } = {}
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        capture.url = String(input)
+        capture.body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        })
+      },
+      {
+        preconnect: fetch0.preconnect.bind(fetch0),
+      },
+    )
+
+    const svc = createOpencodeSvc(cfg())
+    await svc.command({
+      session_id: "ses_1",
+      command: "init",
+      arguments: "--quick",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+    })
+
+    expect(capture.url).toContain('/session/ses_1/command')
+    expect(capture.body).toEqual({
+      command: "init",
+      arguments: "--quick",
+      model: "openai/gpt-5.4",
+      variant: "fast",
+    })
+  })
+
+  test("session reads back model variant from payload", async () => {
+    mock_fetch({
+      id: "ses_1",
+      title: "Session 1",
+      directory: "/tmp/project",
+      workspaceID: "ws_local",
+      model: {
+        providerID: "openai",
+        id: "gpt-5.4",
+        variant: "fast",
+      },
+      time: {
+        created: 1,
+        updated: 2,
+      },
+    })
+
+    const svc = createOpencodeSvc(cfg())
+    expect(await svc.session("ses_1")).toEqual({
+      id: "ses_1",
+      title: "Session 1",
+      directory: "/tmp/project",
+      workspace_id: "ws_local",
+      model: {
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        variant: "fast",
+      },
+      created_at: 1,
+      updated_at: 2,
+    })
+  })
+
+  test("providers preserves model variants metadata", async () => {
+    mock_fetch({
+      all: [
+        {
+          id: "openai",
+          name: "OpenAI",
+          models: {
+            "gpt-5.4": {
+              name: "GPT 5.4",
+              variants: {
+                slow: {},
+                balanced: {},
+                fast: {},
+              },
+            },
+            "gpt-4.1": {
+              name: "GPT 4.1",
+              variants: {},
+            },
+            "gpt-4o": {
+              name: "GPT 4o",
+              variants: ["fast"],
+            },
+          },
+        },
+        {
+          id: "anthropic",
+          name: "Anthropic",
+          models: {
+            "claude-sonnet-4": {
+              name: "Claude Sonnet 4",
+              variants: {
+                thinking: {},
+              },
+            },
+          },
+        },
+      ],
+      connected: ["openai"],
+      default: {
+        openai: "gpt-5.4",
+        anthropic: "claude-sonnet-4",
+      },
+    })
+
+    const svc = createOpencodeSvc(cfg())
+
+    expect(await svc.providers()).toEqual([
+      {
+        id: "openai",
+        name: "OpenAI",
+        connected: true,
+        default_model: "gpt-5.4",
+        models: [
+          {
+            id: "gpt-5.4",
+            name: "GPT 5.4",
+            variants: ["balanced", "fast", "slow"],
+          },
+          {
+            id: "gpt-4.1",
+            name: "GPT 4.1",
+          },
+          {
+            id: "gpt-4o",
+            name: "GPT 4o",
+          },
+        ],
+      },
+    ])
+  })
+
+  test("providers ignores malformed model collections", async () => {
+    mock_fetch({
+      all: [
+        {
+          id: "openai",
+          name: "OpenAI",
+          models: [
+            {
+              name: "GPT 5.4",
+            },
+          ],
+        },
+      ],
+      connected: ["openai"],
+      default: {
+        openai: "gpt-5.4",
+      },
+    })
+
+    const svc = createOpencodeSvc(cfg())
+
+    expect(await svc.providers()).toEqual([
+      {
+        id: "openai",
+        name: "OpenAI",
+        connected: true,
+        default_model: "gpt-5.4",
+        models: [],
+      },
     ])
   })
 

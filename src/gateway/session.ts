@@ -1,5 +1,5 @@
 import crypto from "node:crypto"
-import type { ChatType, ImSession, OpencodeSvc, SessionSvc, Store } from "../contracts.js"
+import type { ChatType, ImSession, OpencodeSvc, SessionModelPref, SessionSvc, Store } from "../contracts.js"
 
 type Input = {
   store: Store
@@ -83,6 +83,7 @@ async function materialize_pending(input: Input, row: ImSession): Promise<ImSess
   const result = await input.opencode.ensure({
     directory: row.directory,
     workspace: row.workspace_id,
+    model: row.model,
   })
   const next = {
     ...row,
@@ -91,17 +92,48 @@ async function materialize_pending(input: Input, row: ImSession): Promise<ImSess
     updated_at: now(),
   }
   await input.store.save_session(next)
+  await input.store.move_session_model_pref(row.session_id, next.session_id)
   return next
+}
+
+function pref_model(pref: SessionModelPref | null, fallback: ImSession["model"]) {
+  if (!pref) return fallback
+  return pref.mode === "default" ? fallback : pref.model
+}
+
+async function rehydrate_active_session(input: Input, row: ImSession): Promise<ImSession> {
+  const pref = await input.store.get_session_model_pref(row.session_id)
+  if (!pref) return row
+  const next = {
+    ...row,
+    model: pref_model(pref, input.model),
+  }
+  if (next.model === row.model) return row
+  await input.store.save_session(next)
+  return next
+}
+
+async function current_session(
+  input: Input,
+  val: { tenant_id: string; chat_id: string; thread_id?: string },
+): Promise<ImSession | null> {
+  const existing = await input.store.get_session({
+    tenant_id: val.tenant_id,
+    chat_id: val.chat_id,
+    thread_id: val.thread_id,
+  })
+  if (!existing || is_pending_session(existing)) return existing
+  return rehydrate_active_session(input, existing)
 }
 
 export function createSessionSvc(input: Input): SessionSvc {
   return {
+    async current(val) {
+      return current_session(input, val)
+    },
+
     async resolve(val) {
-      const existing = await input.store.get_session({
-        tenant_id: val.tenant_id,
-        chat_id: val.chat_id,
-        thread_id: val.thread_id,
-      })
+      const existing = await current_session(input, val)
       if (existing) {
         if (is_pending_session(existing)) return materialize_pending(input, existing)
         return existing
@@ -110,6 +142,7 @@ export function createSessionSvc(input: Input): SessionSvc {
       const result = await input.opencode.ensure({
         directory: bind.directory,
         workspace: bind.workspace_id,
+        model: input.model,
       })
       const next = create(
         val.tenant_id,
@@ -153,6 +186,10 @@ export function createSessionSvc(input: Input): SessionSvc {
         thread_id: val.thread_id,
       })
       const known = await input.store.get_session_by_opencode(val.session.id)
+      const pref = await input.store.get_session_model_pref(val.session.id)
+      const model = pref
+        ? pref_model(pref, input.model)
+        : known?.model ?? val.session.model ?? input.model
       const next = current
         ? {
             ...current,
@@ -162,7 +199,7 @@ export function createSessionSvc(input: Input): SessionSvc {
             session_id: val.session.id,
             directory: val.session.directory,
             workspace_id: val.session.workspace_id,
-            model: known?.model ?? current.model ?? input.model,
+            model,
             state: "active" as const,
             updated_at: now(),
           }
@@ -176,7 +213,7 @@ export function createSessionSvc(input: Input): SessionSvc {
             val.session.id,
             val.session.directory,
             val.session.workspace_id,
-            known?.model ?? input.model,
+            model,
           )
       await input.store.save_session(next)
       return next
@@ -192,6 +229,7 @@ export function createSessionSvc(input: Input): SessionSvc {
         ? await input.opencode.ensure({
             directory,
             workspace: workspace_id,
+            model: items.model,
           })
         : { id: items.session_id }
       const next = {
@@ -208,9 +246,30 @@ export function createSessionSvc(input: Input): SessionSvc {
     async model(val) {
       const item = await input.store.get_session_by_opencode(val.session_id)
       if (!item) return null
+      const mode = val.mode ?? (val.model ? "explicit" : "default")
+      const explicit = val.model
+      if (mode === "explicit" && !explicit) return null
+      let pref: SessionModelPref
+      let next_model: ImSession["model"]
+      if (mode === "default") {
+        pref = { mode }
+        next_model = input.model
+      } else {
+        const model = val.model
+        if (!model) return null
+        pref = {
+          mode,
+          model,
+        }
+        next_model = model
+      }
+      await input.store.save_session_model_pref(
+        val.session_id,
+        pref,
+      )
       const next = {
         ...item,
-        model: val.model,
+        model: next_model,
         updated_at: now(),
       }
       await input.store.save_session(next)
