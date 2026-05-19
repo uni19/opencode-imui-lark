@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { buildCard, sanitizeMarkdown } from "../src/feishu/api.ts"
+import { createRender } from "../src/render/text.ts"
 
 type CardElement = Record<string, unknown>
 
@@ -36,6 +37,178 @@ describe("feishu card rendering", () => {
     expect(elements(out)[1]).toEqual({
       tag: "markdown",
       content: "\\*\\*粗体\\*\\*\n\\- item\n\\`code\\`\n\\# title\n1\\. first",
+    })
+  })
+
+  test("renders assistant final markdown as rich text without escaping supported syntax", () => {
+    const render = createRender()
+    const text = [
+      "**上海 5/18-5/24**",
+      "",
+      "| 日期 | 天气 | 气温 |",
+      "|---|---|---|",
+      "| 5/18 | 阴天 | `20-29C` |",
+    ].join("\n")
+    const out = buildCard(render.final({ text }).body) as Record<string, unknown>
+    const intermediate = buildCard(render.intermediate({ text }).body) as Record<string, unknown>
+
+    expect(out.schema).toBe("2.0")
+    expect(elements(out)[0]).toEqual({
+      tag: "markdown",
+      content: text,
+    })
+    expect(elements(intermediate)[0]).toEqual({
+      tag: "markdown",
+      content: text,
+    })
+  })
+
+  test("strips Feishu-active syntax from assistant markdown while preserving formatting", () => {
+    const render = createRender()
+    const out = buildCard(
+      render.final({
+        text: [
+          "**保留粗体** 和 `inline code`",
+          "<at id=all></at>",
+          "<a href=\"https://evil.example\">钓鱼链接</a>",
+          "[普通链接](https://example.com)",
+          "![tenant asset](img_v2_secret)",
+        ].join("\n"),
+      }).body,
+    ) as Record<string, unknown>
+
+    expect(elements(out)[0]).toEqual({
+      tag: "markdown",
+      content: [
+        "**保留粗体** 和 `inline code`",
+        "@all",
+        "钓鱼链接（https[:]//evil.example）",
+        "普通链接（https[:]//example.com）",
+        "图片（tenant asset）：img_v2_secret",
+      ].join("\n"),
+    })
+  })
+
+  test("sanitizes active markdown outside code and handles edge cases", () => {
+    const input = [
+      "`[literal](https://example.com)`",
+      "```",
+      "<at id=all></at>",
+      "[literal](https://example.com)",
+      "```",
+      '<img data-src="wrong" src="right" alt="a">',
+      '<a data-href="wrong" href="https://right.example">x</a>',
+      '<at id="ou_1">@张三</at>',
+      '<at id="@all"></at>',
+      "<https://evil.example>",
+      "<foo@example.com>",
+      "[ref][r]",
+      "[a [b]](https://evil.example)",
+      "[a [b [c]]](https://deeper.example/path_(x))",
+      "![asset][i]",
+      "![a [b]](img_v2_secret)",
+      "![a [b [c]]](img_v2_deep)",
+      "\\![literal asset][i]",
+      "[r]: https://ref.example",
+      "[r [x [y]]]: https://deep-ref.example/path_(x)",
+      "[i]: img_v2_ref",
+      "[deep [img]]: img_v2_ref_deep",
+      '<number_tag url="https://evil.example">7</number_tag>',
+      '<local_datetime timestamp="1" link="https://evil.example">',
+      '<audio\n src="https://evil.example/x.mp3">play</audio>',
+    ].join("\n")
+
+    expect(sanitizeMarkdown(input)).toBe(
+      [
+        "`[literal](https://example.com)`",
+        "```",
+        "<at id=all></at>",
+        "[literal](https://example.com)",
+        "```",
+        "图片（a）：right",
+        "x（https[:]//right.example）",
+        "@张三",
+        "@all",
+        "https[:]//evil.example",
+        "foo[at]example.com",
+        "ref",
+        "a [b]（https[:]//evil.example）",
+        "a [b [c]]（https[:]//deeper.example/path_(x)）",
+        "图片（asset）",
+        "图片（a [b]）：img_v2_secret",
+        "图片（a [b [c]]）：img_v2_deep",
+        "\\![literal asset][i]",
+        "r：https[:]//ref.example",
+        "r [x [y]]：https[:]//deep-ref.example/path_(x)",
+        "i：img_v2_ref",
+        "deep [img]：img_v2_ref_deep",
+        "7",
+        "",
+        "play",
+      ].join("\n"),
+    )
+  })
+
+  test("recursively neutralizes nested markdown inside balanced labels and alt text", () => {
+    expect(sanitizeMarkdown("[outer [inner](https://evil2.example)](https://evil1.example)")).toBe(
+      "outer inner（https[:]//evil2.example）（https[:]//evil1.example）",
+    )
+    expect(sanitizeMarkdown("![outer ![img](img_v2_inner)](img_v2_outer)")).toBe(
+      "图片（outer 图片（img）：img_v2_inner）：img_v2_outer",
+    )
+    expect(sanitizeMarkdown("[outer [inner](https://evil2.example)][r]\n[r]: https://evil1.example")).toBe(
+      "outer inner（https[:]//evil2.example）\nr：https[:]//evil1.example",
+    )
+    expect(sanitizeMarkdown("![outer ![img](img_v2_inner)][i]\n[i]: img_v2_outer")).toBe(
+      "图片（outer 图片（img）：img_v2_inner）\ni：img_v2_outer",
+    )
+  })
+
+  test("keeps active syntax inert in escaped status and approval content even inside code syntax", () => {
+    const status = buildCard({
+      title: "OpenCode",
+      text: [
+        '`<at id="@all"></at>`',
+        "```",
+        '<a\n href="https://evil.example">x</a>',
+        "```",
+      ].join("\n"),
+    }) as Record<string, unknown>
+    const approval = buildCard({
+      type: "approval",
+      req: "req_active_in_code",
+      tool: '`<person id="@user"/>`',
+      detail: [
+        "```",
+        '<a\n href="https://evil.example">x</a>',
+        "```",
+      ].join("\n"),
+    }) as Record<string, unknown>
+
+    const statusText = String(elements(status)[0]?.content ?? "")
+    const approvalText = String(elements(approval)[0]?.content ?? "")
+    const approvalDetail = String(elements(approval)[1]?.content ?? "")
+
+    expect(statusText).toContain("\\`@all\\`")
+    expect(statusText).toContain("x（https\\[:\\]//evil.example）")
+    expect(statusText).not.toContain("<at")
+    expect(statusText).not.toContain("<a")
+
+    expect(approvalText).toContain("**工具:** \\`@user\\`")
+    expect(approvalText).not.toContain("<person")
+    expect(approvalDetail).toContain("x（https\\[:\\]//evil.example）")
+    expect(approvalDetail).not.toContain("<a")
+  })
+
+  test("keeps nested active markdown inert in escaped status content", () => {
+    const status = buildCard({
+      title: "OpenCode",
+      text: "[outer [inner](https://evil2.example)](https://evil1.example)",
+    }) as Record<string, unknown>
+
+    expect(elements(status)[0]).toEqual({
+      tag: "markdown",
+      content: "outer inner（https\\[:\\]//evil2.example）（https\\[:\\]//evil1.example）",
     })
   })
 

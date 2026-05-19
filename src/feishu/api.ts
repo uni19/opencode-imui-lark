@@ -20,6 +20,7 @@ type CardData = {
   type?: "approval" | "question"
   title?: string
   text?: string
+  textFormat?: "plain" | "markdown"
   step?: string
   template?: string
   req?: string
@@ -106,7 +107,226 @@ type CardPayload = {
 
 function imageLabel(alt: string, url: string) {
   const name = alt.trim() ? `图片（${alt.trim()}）` : "图片"
-  return `${name}：${url}`
+  return url ? `${name}：${url}` : name
+}
+
+function regexText(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function attr(text: string, name: string) {
+  const key = regexText(name)
+  const quoted = new RegExp(`(?:^|\\s)${key}\\s*=\\s*["']([^"']+)["']`, "i").exec(text)
+  if (quoted?.[1]) return quoted[1]
+  const bare = new RegExp(`(?:^|\\s)${key}\\s*=\\s*([^\\s>]+)`, "i").exec(text)
+  return bare?.[1] ?? ""
+}
+
+function inlineText(text: string) {
+  return text.replace(/<[^>]*>/g, "").trim()
+}
+
+function mentionLabel(attrs: string, body = "") {
+  const label = inlineText(body)
+  if (label) return label.startsWith("@") ? label : `@${label}`
+  const id = attr(attrs, "id")
+  if (id) return id.startsWith("@") ? id : `@${id}`
+  return "@用户"
+}
+
+function inertUrl(text: string) {
+  return text.replace(/^([a-z][a-z0-9+.-]*):/i, "$1[:]")
+}
+
+function linkLabel(label: string, url: string) {
+  const text = inertUrl(inlineText(label) || url)
+  return url ? `${text}（${inertUrl(url)}）` : text
+}
+
+function inertEmail(text: string) {
+  return text.replace("@", "[at]")
+}
+
+function linkTarget(text: string) {
+  const item = text.trim()
+  const angled = /^<([^>\s]+)>/.exec(item)
+  if (angled?.[1]) return angled[1]
+  let index = 0
+  while (index < item.length) {
+    const ch = item[index]
+    if (ch === "\\") {
+      index += Math.min(2, item.length - index)
+      continue
+    }
+    if (/\s/.test(ch)) break
+    index += 1
+  }
+  return item.slice(0, index)
+}
+
+function splitLines(text: string) {
+  return text.match(/[^\n]*\n|[^\n]+/g) ?? []
+}
+
+function readBracket(text: string, start: number) {
+  if (text[start] !== "[") return
+  let depth = 1
+  let index = start + 1
+  while (index < text.length) {
+    const ch = text[index]
+    if (ch === "\\") {
+      index += 2
+      continue
+    }
+    if (ch === "\n") return
+    if (ch === "[") {
+      depth += 1
+      index += 1
+      continue
+    }
+    if (ch === "]") {
+      depth -= 1
+      index += 1
+      if (depth === 0) {
+        return {
+          text: text.slice(start + 1, index - 1),
+          end: index,
+        }
+      }
+      continue
+    }
+    index += 1
+  }
+}
+
+function readParens(text: string, start: number) {
+  if (text[start] !== "(") return
+  let depth = 1
+  let index = start + 1
+  while (index < text.length) {
+    const ch = text[index]
+    if (ch === "\\") {
+      index += 2
+      continue
+    }
+    if (ch === "\n") return
+    if (ch === "(") {
+      depth += 1
+      index += 1
+      continue
+    }
+    if (ch === ")") {
+      depth -= 1
+      index += 1
+      if (depth === 0) {
+        return {
+          text: text.slice(start + 1, index - 1),
+          end: index,
+        }
+      }
+      continue
+    }
+    index += 1
+  }
+}
+
+function replaceReferenceDefinitions(text: string) {
+  return splitLines(text)
+    .map((line) => {
+      const body = line.endsWith("\n") ? line.slice(0, -1) : line
+      const suffix = line.endsWith("\n") ? "\n" : ""
+      const prefix = /^([ \t]{0,3})/.exec(body)?.[1] ?? ""
+      const label = readBracket(body, prefix.length)
+      if (!label || body[label.end] !== ":") return line
+      const target = body.slice(label.end + 1).trim()
+      return `${prefix}${inlineText(label.text)}：${inertUrl(linkTarget(target))}${suffix}`
+    })
+    .join("")
+}
+
+function replaceMarkdownBrackets(text: string) {
+  const out: string[] = []
+  let index = 0
+
+  while (index < text.length) {
+    const ch = text[index]
+    if (ch === "\\") {
+      const next = text[index + 1]
+      if ((next === "!" && text[index + 2] === "[") || next === "[") {
+        const labelStart = next === "[" ? index + 1 : index + 2
+        const label = readBracket(text, labelStart)
+        if (label) {
+          const after = text[label.end]
+          if (after === "(") {
+            const target = readParens(text, label.end)
+            if (target) {
+              out.push(text.slice(index, target.end))
+              index = target.end
+              continue
+            }
+          }
+          if (after === "[") {
+            const ref = readBracket(text, label.end)
+            if (ref) {
+              out.push(text.slice(index, ref.end))
+              index = ref.end
+              continue
+            }
+          }
+        }
+      }
+      out.push(text.slice(index, Math.min(index + 2, text.length)))
+      index += Math.min(2, text.length - index)
+      continue
+    }
+
+    const image = ch === "!" && text[index + 1] === "["
+    const labelStart = image ? index + 1 : ch === "[" ? index : -1
+    if (labelStart < 0) {
+      out.push(ch)
+      index += 1
+      continue
+    }
+
+    const label = readBracket(text, labelStart)
+    if (!label) {
+      out.push(ch)
+      index += 1
+      continue
+    }
+
+    const next = text[label.end]
+    if (next === "(") {
+      const target = readParens(text, label.end)
+      if (!target) {
+        out.push(ch)
+        index += 1
+        continue
+      }
+      const sanitizedLabel = sanitizeInlineCode(label.text)
+      out.push(image ? imageLabel(sanitizedLabel, linkTarget(target.text)) : linkLabel(sanitizedLabel, linkTarget(target.text)))
+      index = target.end
+      continue
+    }
+
+    if (next === "[") {
+      const ref = readBracket(text, label.end)
+      if (!ref) {
+        out.push(ch)
+        index += 1
+        continue
+      }
+      const sanitizedLabel = sanitizeInlineCode(label.text)
+      out.push(image ? imageLabel(sanitizedLabel, "") : inlineText(sanitizedLabel))
+      index = ref.end
+      continue
+    }
+
+    out.push(ch)
+    index += 1
+  }
+
+  return out.join("")
 }
 
 function plain(content: string): CardPlainText {
@@ -117,19 +337,117 @@ function plain(content: string): CardPlainText {
 }
 
 export function sanitizeMarkdown(text: string) {
-  return text
-    .replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_, alt: string, url: string) => imageLabel(alt, url))
-    .replace(/<img\b[^>]*src=["'](https?:\/\/[^"']+)["'][^>]*alt=["']([^"']*)["'][^>]*>/gi, (_, url: string, alt: string) =>
-      imageLabel(alt, url),
-    )
-    .replace(/<img\b[^>]*alt=["']([^"']*)["'][^>]*src=["'](https?:\/\/[^"']+)["'][^>]*>/gi, (_, alt: string, url: string) =>
-      imageLabel(alt, url),
-    )
-    .replace(/<img\b[^>]*src=["'](https?:\/\/[^"']+)["'][^>]*>/gi, (_, url: string) => imageLabel("", url))
+  return sanitizeMarkdownOutsideCode(text)
+}
+
+function sanitizeMarkdownOutsideCode(text: string) {
+  const out: string[] = []
+  const plain: string[] = []
+  const lines = splitLines(text)
+  let fence: { mark: string; size: number } | undefined
+
+  const flush = () => {
+    if (plain.length === 0) return
+    out.push(sanitizeInlineCode(plain.join("")))
+    plain.length = 0
+  }
+
+  for (const line of lines) {
+    const body = line.endsWith("\n") ? line.slice(0, -1) : line
+    if (fence) {
+      out.push(line)
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(body)
+      if (close?.[1] && close[1].startsWith(fence.mark) && close[1].length >= fence.size) fence = undefined
+      continue
+    }
+
+    const open = /^ {0,3}(`{3,}|~{3,})/.exec(body)
+    if (open?.[1]) {
+      flush()
+      out.push(line)
+      fence = {
+        mark: open[1][0] ?? "`",
+        size: open[1].length,
+      }
+      continue
+    }
+
+    plain.push(line)
+  }
+
+  flush()
+  return out.join("")
+}
+
+function backticks(text: string, index: number) {
+  let end = index
+  while (text[end] === "`") end += 1
+  return end - index
+}
+
+function findBackticks(text: string, start: number, size: number) {
+  let index = start
+  while (index < text.length) {
+    const hit = text.indexOf("`", index)
+    if (hit < 0) return -1
+    const len = backticks(text, hit)
+    if (len === size) return hit
+    index = hit + len
+  }
+  return -1
+}
+
+function sanitizeInlineCode(text: string) {
+  const out: string[] = []
+  let index = 0
+
+  while (index < text.length) {
+    const start = text.indexOf("`", index)
+    if (start < 0) {
+      out.push(sanitizeMarkdownSegment(text.slice(index)))
+      break
+    }
+    const size = backticks(text, start)
+    const end = findBackticks(text, start + size, size)
+    if (end < 0) {
+      out.push(sanitizeMarkdownSegment(text.slice(index)))
+      break
+    }
+
+    out.push(sanitizeMarkdownSegment(text.slice(index, start)))
+    out.push(text.slice(start, end + size))
+    index = end + size
+  }
+
+  return out.join("")
+}
+
+function sanitizeMarkdownSegment(text: string) {
+  return replaceMarkdownBrackets(
+    replaceReferenceDefinitions(text)
+      .replace(/<img\b([^>]*)>/gi, (_, attrs: string) => {
+        const src = attr(attrs, "src")
+        return src ? imageLabel(attr(attrs, "alt"), src) : "图片"
+      })
+      .replace(/<(at|person)\b([^>]*)>([\s\S]*?)<\/\1>/gi, (_, _tag: string, attrs: string, body: string) => mentionLabel(attrs, body))
+      .replace(/<(at|person)\b([^>]*)\/>/gi, (_, _tag: string, attrs: string) => mentionLabel(attrs))
+      .replace(/<(a|link)\b([^>]*)>([\s\S]*?)<\/\1>/gi, (_, _tag: string, attrs: string, body: string) =>
+        linkLabel(body, attr(attrs, "href") || attr(attrs, "url")),
+      )
+      .replace(/<(a|link)\b([^>]*)\/>/gi, (_, _tag: string, attrs: string) => {
+        const url = attr(attrs, "href") || attr(attrs, "url")
+        return linkLabel(url, url)
+      })
+      .replace(/<([a-z][a-z0-9+.-]*:[^>\s]+)>/gi, (_, url: string) => inertUrl(url))
+      .replace(/<([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})>/gi, (_, email: string) => inertEmail(email))
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<([a-z][a-z0-9_-]*)\b[\s\S]*?>([\s\S]*?)<\/\1>/gi, (_, _tag: string, body: string) => inlineText(body))
+      .replace(/<\/?[a-z][a-z0-9_-]*\b[\s\S]*?\/?>/gi, ""),
+  )
 }
 
 function escapeDynamicMarkdownText(text: string) {
-  return sanitizeMarkdown(text)
+  return sanitizeMarkdownSegment(text)
     .replace(/[\\`*_~()[\]{}|]/g, "\\$&")
     .replace(/^(\s{0,3})([#>])/gm, "$1\\$2")
     .replace(/^(\s{0,3})([-+*])(\s+)/gm, "$1\\$2$3")
@@ -273,7 +591,7 @@ function approval(body: CardData) {
 
 function status(body: CardData) {
   const step = body.step ? escapeDynamicMarkdownText(body.step) : undefined
-  const text = escapeDynamicMarkdownText(body.text ?? "")
+  const text = body.textFormat === "markdown" ? body.text ?? "" : escapeDynamicMarkdownText(body.text ?? "")
 
   return payload({
     config: {

@@ -49,6 +49,7 @@ export function createRender(): Render {
         title: "阶段性更新（后台仍在继续）",
         template: "green",
         state: "intermediate",
+        textFormat: "markdown",
         text: input.text,
       })
     },
@@ -58,6 +59,7 @@ export function createRender(): Render {
         title: "最终完成",
         template: "green",
         state: "final",
+        textFormat: "markdown",
         text: input.text,
       })
     },
