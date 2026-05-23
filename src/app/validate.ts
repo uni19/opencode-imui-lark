@@ -1,6 +1,7 @@
 import { accessSync, constants, existsSync, mkdirSync } from "node:fs"
 import path from "node:path"
 import type { AppCfg } from "../contracts.js"
+import { parseWorkspaceSelection } from "../workspace.js"
 
 export type ValidateReport = {
   ok: boolean
@@ -41,6 +42,13 @@ export function validateAppCfg(conf: AppCfg, env: NodeJS.ProcessEnv = process.en
 
   if (env.OPENCODE_MODEL && !conf.opencode.model) {
     add(errors, "OPENCODE_MODEL 格式应为 <provider>/<model_id>[@<variant>]。")
+  }
+
+  if (env.OPENCODE_WORKSPACE?.trim()) {
+    const selected = parseWorkspaceSelection(env.OPENCODE_WORKSPACE)
+    if (!selected.ok) {
+      add(errors, "OPENCODE_WORKSPACE 必须是 wrk* workspace ID；本地项目请留空。")
+    }
   }
 
   if (conf.feishu.mode === "long_conn") {

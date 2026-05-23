@@ -81,4 +81,21 @@ describe("validate app cfg", () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  test("fails on invalid OPENCODE_WORKSPACE env", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "oc-feishu-validate-"))
+
+    try {
+      await mkdir(path.join(root, "repo"), { recursive: true })
+
+      const out = validateAppCfg(conf(root), {
+        OPENCODE_WORKSPACE: "ws_bad",
+      })
+
+      expect(out.ok).toBe(false)
+      expect(out.errors).toContain("OPENCODE_WORKSPACE 必须是 wrk* workspace ID；本地项目请留空。")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
