@@ -1,6 +1,7 @@
 import type { AppCfg, OpencodeModel } from "../contracts.js"
 import path from "node:path"
 import { configDir, dataDir } from "./env.js"
+import { normalizeWorkspace } from "../workspace.js"
 
 export function parseOpencodeModel(val?: string): OpencodeModel | undefined {
   const input = val?.trim()
@@ -99,7 +100,7 @@ export function cfg(): AppCfg {
       username: process.env.OPENCODE_USERNAME ?? "opencode",
       password: process.env.OPENCODE_PASSWORD,
       directory: dir(process.env.OPENCODE_DIRECTORY),
-      workspace: process.env.OPENCODE_WORKSPACE,
+      workspace: normalizeWorkspace(process.env.OPENCODE_WORKSPACE),
       agent: process.env.OPENCODE_AGENT,
       model: model(),
     },
