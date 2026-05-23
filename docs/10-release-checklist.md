@@ -41,7 +41,7 @@
 - [ ] `OPENCODE_BASE_URL` 已指向可访问的 OpenCode Server
 - [ ] `OPENCODE_PASSWORD` 已配置且和服务端一致
 - [ ] `OPENCODE_DIRECTORY` 已配置且目录真实存在
-- [ ] 若要验证 workspace：`OPENCODE_WORKSPACE` 已配置或已准备可用 workspace 名称
+- [ ] 若要验证远端 workspace：`OPENCODE_WORKSPACE` 已配置为可用 `wrk*` ID；若验证本地项目，保持为空
 - [ ] `IMUI_DB_PATH` 所在目录可写
 - [ ] `IMUI_ASSET_TTL_HOURS`、`IMUI_ASSET_MAX_MB`、`IMUI_BACKUP_RETENTION_DAYS` 已按目标环境确认
 - [ ] 已先执行 `bun run release:doctor`，且输出中没有 `errors`
@@ -139,7 +139,7 @@ bun run release:smoke
 - [ ] `/repo`
 - [ ] `/repo --chat <directory>`
 - [ ] `/repo --me <directory>`
-- [ ] `/repo --workspace <workspace>`
+- [ ] `/repo --workspace <workspace>`（远端用 `wrk*` ID；本地项目省略 `--workspace`；如需清空当前绑定，直接使用 `/repo --workspace`）
 - [ ] `/model`（无参数）会返回当前模型、默认模型，并明确提示：当 provider 暴露 variants 时，可在 `/models` 查看这些 variants；切换时使用 `/model <provider>/<model_id>@<variant>`，清除当前 variant 则直接使用 `/model <provider>/<model_id>`
 - [ ] `/model <provider>/<model_id>` / `/model <provider>/<model_id>@<variant>`
 - [ ] `/model reset`
