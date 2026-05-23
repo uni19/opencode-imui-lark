@@ -51,14 +51,15 @@ IMUI_DB_PATH=.data/imui.db
 OPENCODE_BASE_URL=http://127.0.0.1:4096
 OPENCODE_USERNAME=opencode
 OPENCODE_PASSWORD=your-password
-OPENCODE_DIRECTORY=/absolute/path/to/your/worktree
+OPENCODE_DIRECTORY=/absolute/path/to/your/working-directory
 ```
 
 说明：
 
 - `FEISHU_MODE=stdin` 表示不用真实飞书，直接从标准输入喂测试消息
 - `IMUI_DB_PATH` 是 SQLite 文件路径；默认会在仓库下创建 `.data/imui.db`
-- `OPENCODE_DIRECTORY` 建议填绝对路径，作为默认工作目录
+- `OPENCODE_DIRECTORY` 建议填绝对路径，作为默认工作目录，不要求是 Git worktree
+- `OPENCODE_WORKSPACE` 只在远端 workspace 场景下需要，必须使用 `wrk*` ID；本地项目通常留空
 - `OPENCODE_PASSWORD` 需要与正在运行的 OpenCode Server 保持一致
 
 ### 4. 启动服务
@@ -191,7 +192,7 @@ Feishu Open Platform
 - `OPENCODE_USERNAME`: OpenCode 用户名，默认 `opencode`
 - `OPENCODE_PASSWORD`: OpenCode 密码
 - `OPENCODE_DIRECTORY`: 默认工作目录
-- `OPENCODE_WORKSPACE`: 默认 workspace
+- `OPENCODE_WORKSPACE`: 默认远端 workspace；仅在远端场景下需要，必须使用 `wrk*` ID，本地项目通常留空
 - `OPENCODE_AGENT`: 默认 agent
 - `OPENCODE_MODEL`: 默认模型，格式为 `<provider>/<model_id>[@<variant>]`
 
@@ -217,12 +218,13 @@ FEISHU_BOT_OPEN_ID=ou_xxx
 OPENCODE_BASE_URL=http://127.0.0.1:4096
 OPENCODE_USERNAME=opencode
 OPENCODE_PASSWORD=your-password
-OPENCODE_DIRECTORY=/absolute/path/to/your/worktree
+OPENCODE_DIRECTORY=/absolute/path/to/your/working-directory
 ```
 
 说明：
 
 - `FEISHU_BOT_OPEN_ID` 不是强制项，但建议配置，能减少群聊首条 `@bot` 判断歧义
+- `OPENCODE_DIRECTORY` 表示默认工作目录，不要求是 Git worktree；`OPENCODE_WORKSPACE` 只在远端 workspace 场景下需要，必须使用 `wrk*` ID，本地项目通常留空
 - 如果不填 `FEISHU_BOT_OPEN_ID`，服务会回退到按应用名称匹配 mention
 - 真实飞书联调前，请先跑完自动化测试，再按发布清单逐项手工验证
 
