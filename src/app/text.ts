@@ -1,4 +1,5 @@
 import type { AppCfg, ConnState, ImSession, OpencodeModel, OpencodeResult, RepoPref, Task } from "../contracts.js"
+import { escapeDynamicMarkdownText } from "../feishu/api.js"
 import { normalizeWorkspace } from "../workspace.js"
 
 export type RecoverMode = "boot" | "message" | "opencode"
@@ -223,12 +224,23 @@ export function status_text(input: StatusInput) {
   return status_lines(input).join("\n")
 }
 
+function completed_progress_markdown(row?: Task | null) {
+  if (row?.status !== "completed" || !row.note) return
+  return {
+    plainLine: `最近进展：${row.note}`,
+    richBlock: `${escapeDynamicMarkdownText("最近进展：")}\n\n${row.note}`,
+  }
+}
+
 export function status_card(input: StatusInput) {
   const [title = "OpenCode", ...body] = status_lines(input)
-  return {
-    title,
-    text: body.join("\n"),
-  }
+  const rich = completed_progress_markdown(input.row)
+  const text = body
+    .filter((line) => !rich || line !== rich.plainLine)
+    .map((line) => escapeDynamicMarkdownText(line))
+
+  if (rich) text.push(rich.richBlock)
+  return { title, text: text.join("\n"), textFormat: "markdown" }
 }
 
 export function friendly(err: unknown): string {

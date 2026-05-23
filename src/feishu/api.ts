@@ -446,7 +446,7 @@ function sanitizeMarkdownSegment(text: string) {
   )
 }
 
-function escapeDynamicMarkdownText(text: string) {
+export function escapeDynamicMarkdownText(text: string) {
   return sanitizeMarkdownSegment(text)
     .replace(/[\\`*_~()[\]{}|]/g, "\\$&")
     .replace(/^(\s{0,3})([#>])/gm, "$1\\$2")
