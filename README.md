@@ -250,7 +250,7 @@ OPENCODE_DIRECTORY=/absolute/path/to/your/worktree
 - `/commands`: 查看当前目录 / workspace 下可转发 slash 命令
 - `/repo --workspace <workspace>`: 为当前会话绑定 workspace
 - `/repo <directory> --workspace <workspace>`: 同时绑定目录和 workspace
-- `--chat` / `--me` 可与 `--workspace` 组合使用，例如 `/repo --chat /repo/path --workspace ws_local`
+- `--chat` / `--me` 可与 `--workspace` 组合使用，例如清空当前聊天绑定可用 `/repo --chat /repo/path --workspace`，远端写法 `/repo --chat /repo/path --workspace wrk_demo`
 - 未命中的 slash 会尝试透传到 OpenCode 执行，例如 `/init`
 
 ## 飞书控制台配置

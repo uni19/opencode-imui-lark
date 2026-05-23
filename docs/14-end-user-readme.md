@@ -69,7 +69,7 @@ FEISHU_MODE=stdin
 OPENCODE_BASE_URL=http://127.0.0.1:4096
 OPENCODE_USERNAME=opencode
 OPENCODE_PASSWORD=your-password
-OPENCODE_DIRECTORY=/absolute/path/to/your/worktree
+OPENCODE_DIRECTORY=/absolute/path/to/your/working-directory
 ```
 
 ### 真实飞书配置
@@ -85,7 +85,7 @@ FEISHU_BOT_OPEN_ID=ou_xxx
 OPENCODE_BASE_URL=http://127.0.0.1:4096
 OPENCODE_USERNAME=opencode
 OPENCODE_PASSWORD=your-password
-OPENCODE_DIRECTORY=/absolute/path/to/your/worktree
+OPENCODE_DIRECTORY=/absolute/path/to/your/working-directory
 ```
 
 推荐确认这些变量：
@@ -98,6 +98,9 @@ OPENCODE_DIRECTORY=/absolute/path/to/your/worktree
 - `OPENCODE_USERNAME`
 - `OPENCODE_PASSWORD`
 - `OPENCODE_DIRECTORY`
+- `OPENCODE_WORKSPACE`
+
+说明：`OPENCODE_DIRECTORY` 表示默认工作目录，不要求是 Git worktree；`OPENCODE_WORKSPACE` 只在远端 workspace 场景下需要，必须使用 `wrk*` ID，本地项目通常留空。
 
 如果你不想用默认数据目录，还可以配置：
 
