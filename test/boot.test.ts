@@ -3339,15 +3339,16 @@ describe("commands", () => {
       body: {
         title: "会话状态：idle",
         template: "blue",
+        textFormat: "markdown",
       },
     })
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
     expect(text).not.toContain("会话状态：idle")
-    expect(text).toContain("目录：/tmp (workspace=wrk_session)")
+    expect(text).toContain("目录：/tmp \\(workspace=wrk\\_session\\)")
     expect(text).toContain("当前模型：anthropic/claude-sonnet-4")
-    expect(text).toContain("聊天默认：/tmp/chat (workspace=wrk_chat)")
-    expect(text).toContain("用户默认：/tmp/user (workspace=wrk_user)")
-    expect(text).toContain("session: ses_1")
+    expect(text).toContain("聊天默认：/tmp/chat \\(workspace=wrk\\_chat\\)")
+    expect(text).toContain("用户默认：/tmp/user \\(workspace=wrk\\_user\\)")
+    expect(text).toContain("session: ses\\_1")
   })
 
   test("/status shows the pref-rehydrated current session model", async () => {
@@ -3396,10 +3397,10 @@ describe("commands", () => {
     expect(ok).toBeTrue()
     expect(ai.ensures).toEqual([])
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
-    expect(text).toContain("目录：/tmp (workspace=wrk_status)")
+    expect(text).toContain("目录：/tmp \\(workspace=wrk\\_status\\)")
     expect(text).toContain("当前模型：anthropic/claude-sonnet-4@max")
     expect(text).toContain("默认模型：openai/gpt-5.4")
-    expect(text).toContain("session: ses_1")
+    expect(text).toContain("session: ses\\_1")
     expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
       model: {
         providerID: "anthropic",
@@ -3407,6 +3408,48 @@ describe("commands", () => {
         variant: "max",
       },
     })
+  })
+
+  test("/status preserves completed progress markdown while keeping metadata escaped", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ workspace_id: "wrk_done" }))
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "completed",
+        note: ["**So Far**", "- shipped", '`code`'].join("\n"),
+        updated_at: 1710000000000,
+      }),
+    )
+    await store.set_conn({
+      name: "message",
+      status: "ready",
+      updated_at: 1,
+    })
+    await store.set_conn({
+      name: "opencode",
+      status: "ready",
+      updated_at: 1,
+    })
+
+    const ok = await on_cmd("/status", cfg(), route(store), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/status" }))
+
+    expect(ok).toBeTrue()
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "card",
+      body: {
+        title: "会话状态：completed（已完成）",
+        template: "blue",
+        textFormat: "markdown",
+      },
+    })
+    const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
+    expect(text).toContain("目录：/tmp \\(workspace=wrk\\_done\\)")
+    expect(text).toContain("session: ses\\_1")
+    expect(text).toContain("最近进展：\n\n**So Far**\n- shipped\n`code`")
+    expect(text).not.toContain("最近进展：\\*\\*So Far\\*\\*")
   })
 
   test("/sessions uses current scope, locally filters exact workspace, and marks current session", async () => {

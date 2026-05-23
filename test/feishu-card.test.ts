@@ -1,6 +1,7 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from "bun:test"
+import { status_card } from "../src/app/text.ts"
 import { buildCard, sanitizeMarkdown } from "../src/feishu/api.ts"
 import { createRender } from "../src/render/text.ts"
 
@@ -38,6 +39,87 @@ describe("feishu card rendering", () => {
       tag: "markdown",
       content: "\\*\\*粗体\\*\\*\n\\- item\n\\`code\\`\n\\# title\n1\\. first",
     })
+  })
+
+  test("status_card keeps dynamic status content inert on the markdown serializer path", () => {
+    const card = status_card({
+      row: {
+        status: "waiting_attachment",
+        note: ["**bold**", "- item", '`<at id="@all"></at>`', "[repo](https://evil.example)"].join("\n"),
+        updated_at: 1710000000000,
+      },
+      current: null,
+      pref: { chat: null, user: null },
+      conf: {
+        log: { level: "info" },
+        storage: { path: ":memory:" },
+        feishu: { mode: "off" },
+        opencode: {
+          base_url: "http://127.0.0.1:4096",
+          username: "opencode",
+          directory: "/tmp/work",
+          model: {
+            providerID: "openai",
+            modelID: "gpt-5.4",
+          },
+        },
+      },
+    } as Parameters<typeof status_card>[0])
+    const out = buildCard(card) as Record<string, unknown>
+    const content = String(elements(out)[0]?.content ?? "")
+
+    expect(card.textFormat).toBe("markdown")
+    expect(out.schema).toBe("2.0")
+    expect(elements(out)[0]).toMatchObject({
+      tag: "markdown",
+    })
+    expect(content).toContain("\\*\\*bold\\*\\*")
+    expect(content).toContain("\\- item")
+    expect(content).toContain("\\`@all\\`")
+    expect(content).toContain("repo（https\\[:\\]//evil.example）")
+    expect(content).not.toContain("<at")
+    expect(content).not.toContain("[repo](https://evil.example)")
+  })
+
+  test("status_card preserves completed progress markdown while keeping other status lines inert", () => {
+    const card = status_card({
+      row: {
+        status: "completed",
+        note: ["**So Far**", "- shipped", '`code`'].join("\n"),
+        updated_at: 1710000000000,
+      },
+      current: {
+        session_id: "ses_1",
+        directory: "/tmp/work",
+        workspace_id: "wrk_done",
+        state: "active",
+      },
+      pref: { chat: null, user: null },
+      conf: {
+        log: { level: "info" },
+        storage: { path: ":memory:" },
+        feishu: { mode: "off" },
+        opencode: {
+          base_url: "http://127.0.0.1:4096",
+          username: "opencode",
+          directory: "/tmp/work",
+          model: {
+            providerID: "openai",
+            modelID: "gpt-5.4",
+          },
+        },
+      },
+    } as Parameters<typeof status_card>[0])
+    const out = buildCard(card) as Record<string, unknown>
+    const content = String(elements(out)[0]?.content ?? "")
+
+    expect(card.textFormat).toBe("markdown")
+    expect(out.schema).toBe("2.0")
+    expect(content).toContain("目录：/tmp/work \\(workspace=wrk\\_done\\)")
+    expect(content).toContain("session: ses\\_1")
+    expect(content).toContain("最近进展：\n\n**So Far**\n- shipped\n`code`")
+    expect(content).not.toContain("最近进展：\\n\\n\\*\\*So Far\\*\\*")
+    expect(content).not.toContain("最近进展：\\*\\*So Far\\*\\*")
   })
 
   test("renders assistant final markdown as rich text without escaping supported syntax", () => {
