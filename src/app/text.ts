@@ -1,4 +1,5 @@
 import type { AppCfg, ConnState, ImSession, OpencodeModel, OpencodeResult, RepoPref, Task } from "../contracts.js"
+import { normalizeWorkspace } from "../workspace.js"
 
 export type RecoverMode = "boot" | "message" | "opencode"
 
@@ -50,8 +51,9 @@ function label(status?: string) {
 
 export function repo(dir?: string, workspace?: string) {
   const line = dir ? dir : "未绑定"
-  if (!workspace) return line
-  return `${line} (workspace=${workspace})`
+  const scoped = normalizeWorkspace(workspace)
+  if (!scoped) return line
+  return `${line} (workspace=${scoped})`
 }
 
 export function model(val?: OpencodeModel) {
@@ -252,6 +254,14 @@ export function friendly(err: unknown): string {
   if (low.includes("timed out") || low.includes("timeout") || low.includes("etimedout") || low.includes("aborterror")) {
     return "请求超时：服务长时间没有响应，请稍后重试。"
   }
+  if (
+    low.includes("workspace not found:") &&
+    low.includes("opencode request failed:")
+  ) {
+    const hit = /workspace not found:\s*(wrk\S*)/i.exec(val)
+    const workspace = hit?.[1] ?? "指定的 workspace"
+    return `Workspace 不存在：${workspace}。请先用 /workspaces 查看当前目录下可用 ID；本地项目请省略 --workspace，若要清空当前绑定请直接使用 /repo --workspace。`
+  }
   if (low.includes("opencode request failed: 404")) return "OpenCode 接口不可用：请检查服务地址、接口版本或 base_url 配置。"
   if (low.includes("opencode request failed: 429") || low.includes("rate limit") || low.includes("too many requests")) {
     return "模型请求过于频繁：已触发限流，请稍后重试。"
@@ -345,6 +355,9 @@ function advice(err: unknown) {
   }
   if (low.startsWith("attachment fetch failed:") || low.includes("feishu asset failed: 404") || low.includes("feishu asset failed: 400")) {
     return "建议：请重新发送附件和说明，再试一次。"
+  }
+  if (low.includes("workspace not found:") && low.includes("opencode request failed:")) {
+    return "建议：先发送 /workspaces 确认可用 workspace ID；如果你要用本地项目，请省略 --workspace；如果你要清空当前绑定，直接发送 /repo --workspace。"
   }
   if (low.includes("timed out") || low.includes("timeout") || low.includes("etimedout") || low.includes("aborterror")) {
     return "建议：可稍后重试当前请求，一般不需要重发上一条消息。"

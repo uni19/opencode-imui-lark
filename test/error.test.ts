@@ -117,6 +117,9 @@ describe("error helpers", () => {
     expect(friendly("opencode request failed: 404 Not Found")).toBe(
       "OpenCode 接口不可用：请检查服务地址、接口版本或 base_url 配置。",
     )
+    expect(friendly("opencode request failed: 500 Internal Server Error - Workspace not found: wrk_missing")).toBe(
+      "Workspace 不存在：wrk_missing。请先用 /workspaces 查看当前目录下可用 ID；本地项目请省略 --workspace，若要清空当前绑定请直接使用 /repo --workspace。",
+    )
     expect(friendly("feishu asset failed: 404 Not Found")).toBe(
       "附件下载失败：资源不存在、已失效，或当前消息上下文已不可访问。",
     )
@@ -147,6 +150,9 @@ describe("error helpers", () => {
     )
     expect(explain("feishu asset failed: 404 Not Found")).toContain(
       "建议：请重新发送附件和说明，再试一次。",
+    )
+    expect(explain("opencode request failed: 500 Internal Server Error - Workspace not found: wrk_missing")).toContain(
+      "建议：先发送 /workspaces 确认可用 workspace ID；如果你要用本地项目，请省略 --workspace；如果你要清空当前绑定，直接发送 /repo --workspace。",
     )
     expect(explain("opencode request failed: 400 Bad Request - session state invalid")).toContain(
       "建议：当前会话状态或请求参数可能异常，可先发送 /abort，再重试或重发上一条消息。",
