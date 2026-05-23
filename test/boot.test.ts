@@ -365,7 +365,7 @@ describe("boot helpers", () => {
     const current = {
       session_id: "ses_1",
       directory: "/tmp/work",
-      workspace_id: "ws_1",
+      workspace_id: "wrk_1",
       state: "active" as const,
     }
     const message = {
@@ -556,7 +556,7 @@ describe("boot helpers", () => {
     const current = {
       session_id: "ses_1",
       directory: "/tmp/work",
-      workspace_id: "ws_1",
+      workspace_id: "wrk_1",
       state: "active" as const,
     }
 
@@ -2810,7 +2810,7 @@ describe("commands", () => {
     const ui = feishu()
     await store.save_session(
       session({
-        workspace_id: "ws_1",
+        workspace_id: "wrk_1",
         model: {
           providerID: "anthropic",
           modelID: "claude-sonnet-4",
@@ -2823,7 +2823,7 @@ describe("commands", () => {
     expect(ok).toBeTrue()
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
     expect(text).toContain("当前会话：ses_1")
-    expect(text).toContain("目录：/tmp (workspace=ws_1)")
+    expect(text).toContain("目录：/tmp (workspace=wrk_1)")
     expect(text).toContain("模型：anthropic/claude-sonnet-4")
     expect(text).toContain("使用 /session <session_id> 切换当前会话。")
   })
@@ -2836,7 +2836,7 @@ describe("commands", () => {
     const conf = cfg()
     await store.save_session(
       session({
-        workspace_id: "ws_pref",
+        workspace_id: "wrk_pref",
         model: {
           providerID: "openai",
           modelID: "gpt-5.4",
@@ -2865,7 +2865,7 @@ describe("commands", () => {
     expect(ai.ensures).toEqual([])
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
     expect(text).toContain("当前会话：ses_1")
-    expect(text).toContain("目录：/tmp (workspace=ws_pref)")
+    expect(text).toContain("目录：/tmp (workspace=wrk_pref)")
     expect(text).toContain("模型：anthropic/claude-sonnet-4@max")
     expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
       model: {
@@ -2888,7 +2888,7 @@ describe("commands", () => {
           id,
           title: "picked",
           directory: "/tmp/alt",
-          workspace_id: "ws_alt",
+          workspace_id: "wrk_alt",
           created_at: 1,
           updated_at: 1,
         } satisfies OpencodeSession
@@ -2904,7 +2904,7 @@ describe("commands", () => {
         text: [
           "已切换当前会话。",
           "session: ses_alt",
-          "目录：/tmp/alt (workspace=ws_alt)",
+          "目录：/tmp/alt (workspace=wrk_alt)",
           "模型：anthropic/claude-sonnet-4",
         ].join("\n"),
       },
@@ -2925,7 +2925,7 @@ describe("commands", () => {
           id,
           title: "picked",
           directory: "/tmp/alt",
-          workspace_id: "ws_alt",
+          workspace_id: "wrk_alt",
           created_at: 1,
           updated_at: 1,
         } satisfies OpencodeSession
@@ -2941,7 +2941,7 @@ describe("commands", () => {
         text: [
           "已切换当前会话。",
           "session: ses_alt",
-          "目录：/tmp/alt (workspace=ws_alt)",
+          "目录：/tmp/alt (workspace=wrk_alt)",
           "模型：anthropic/claude-sonnet-4",
         ].join("\n"),
       },
@@ -3004,7 +3004,7 @@ describe("commands", () => {
       async commands(input?: { directory?: string; workspace?: string }) {
         expect(input).toEqual({
           directory: "/tmp",
-          workspace: "ws_cmd",
+          workspace: "wrk_cmd",
         })
         return [
           {
@@ -3020,12 +3020,12 @@ describe("commands", () => {
           command: "init",
           arguments: "--quick",
           directory: "/tmp",
-          workspace: "ws_cmd",
+          workspace: "wrk_cmd",
         })
         return "已执行 /init。"
       },
     } satisfies OpencodeSvc
-    await store.save_session(session({ workspace_id: "ws_cmd" }))
+    await store.save_session(session({ workspace_id: "wrk_cmd" }))
     await store.save_inbound(inbound())
     await store.save_task(
       row({
@@ -3104,7 +3104,7 @@ describe("commands", () => {
     const svc = createTaskSvc(store)
     const ui = feishu()
     const conf = cfg()
-    await store.save_session(session({ workspace_id: "ws_cmd" }))
+    await store.save_session(session({ workspace_id: "wrk_cmd" }))
     await store.save_session_model_pref("ses_1", {
       mode: "explicit",
       model: {
@@ -3117,7 +3117,7 @@ describe("commands", () => {
       async commands(input?: { directory?: string; workspace?: string }) {
         expect(input).toEqual({
           directory: "/tmp",
-          workspace: "ws_cmd",
+          workspace: "wrk_cmd",
         })
         return [
           {
@@ -3140,7 +3140,7 @@ describe("commands", () => {
           command: "init",
           arguments: "--quick",
           directory: "/tmp",
-          workspace: "ws_cmd",
+          workspace: "wrk_cmd",
           model: {
             providerID: "anthropic",
             modelID: "claude-sonnet-4",
@@ -3187,20 +3187,20 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ directory: "/tmp/session", workspace_id: "ws_session" }))
+    await store.save_session(session({ directory: "/tmp/session", workspace_id: "wrk_session" }))
     await store.save_pref({
       scope: "chat",
       tenant_id: "tenant",
       chat_id: "chat",
       directory: "/tmp/chat",
-      workspace_id: "ws_chat",
+      workspace_id: "wrk_chat",
     })
     await store.save_pref({
       scope: "user",
       tenant_id: "tenant",
       user_id: "user",
       directory: "/tmp/user",
-      workspace_id: "ws_user",
+      workspace_id: "wrk_user",
     })
 
     const ok = await on_cmd("/repo", cfg(), route(store), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/repo" }))
@@ -3210,9 +3210,9 @@ describe("commands", () => {
       kind: "text",
       body: {
         text: [
-          "当前目录：/tmp/session (workspace=ws_session)",
-          "聊天默认：/tmp/chat (workspace=ws_chat)",
-          "用户默认：/tmp/user (workspace=ws_user)",
+          "当前目录：/tmp/session (workspace=wrk_session)",
+          "聊天默认：/tmp/chat (workspace=wrk_chat)",
+          "用户默认：/tmp/user (workspace=wrk_user)",
         ].join("\n"),
       },
     })
@@ -3222,28 +3222,35 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
+    const oc = {
+      ...opencode(),
+      async workspaces(input?: { directory?: string }) {
+        expect(input).toEqual({ directory: "/tmp/chat-next" })
+        return [{ id: "wrk_chat_next" }]
+      },
+    } satisfies OpencodeSvc
 
     const ok = await on_cmd(
-      "/repo --chat /tmp/chat-next --workspace ws_chat_next",
+      "/repo --chat /tmp/chat-next --workspace wrk_chat_next",
       cfg(),
       route(store),
       svc,
       store,
       ui.api,
       createRender(),
-      opencode(),
-      inbound({ text: "/repo --chat /tmp/chat-next --workspace ws_chat_next" }),
+      oc,
+      inbound({ text: "/repo --chat /tmp/chat-next --workspace wrk_chat_next" }),
     )
 
     expect(ok).toBeTrue()
     expect(await store.get_pref({ scope: "chat", tenant_id: "tenant", chat_id: "chat" })).toMatchObject({
       directory: "/tmp/chat-next",
-      workspace_id: "ws_chat_next",
+      workspace_id: "wrk_chat_next",
     })
     expect(ui.list[0]?.out).toMatchObject({
       kind: "text",
       body: {
-        text: "已设置当前聊天默认绑定：/tmp/chat-next (workspace=ws_chat_next)",
+        text: "已设置当前聊天默认绑定：/tmp/chat-next (workspace=wrk_chat_next)",
       },
     })
   })
@@ -3258,7 +3265,7 @@ describe("commands", () => {
       tenant_id: "tenant",
       chat_id: "chat",
       directory: "/tmp/chat",
-      workspace_id: "ws_chat",
+      workspace_id: "wrk_chat",
     })
 
     const ok = await on_cmd(
@@ -3292,7 +3299,7 @@ describe("commands", () => {
     const ui = feishu()
     await store.save_session(
       session({
-        workspace_id: "ws_session",
+        workspace_id: "wrk_session",
         model: {
           providerID: "anthropic",
           modelID: "claude-sonnet-4",
@@ -3304,14 +3311,14 @@ describe("commands", () => {
       tenant_id: "tenant",
       chat_id: "chat",
       directory: "/tmp/chat",
-      workspace_id: "ws_chat",
+      workspace_id: "wrk_chat",
     })
     await store.save_pref({
       scope: "user",
       tenant_id: "tenant",
       user_id: "user",
       directory: "/tmp/user",
-      workspace_id: "ws_user",
+      workspace_id: "wrk_user",
     })
     await store.set_conn({
       name: "message",
@@ -3336,10 +3343,10 @@ describe("commands", () => {
     })
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
     expect(text).not.toContain("会话状态：idle")
-    expect(text).toContain("目录：/tmp (workspace=ws_session)")
+    expect(text).toContain("目录：/tmp (workspace=wrk_session)")
     expect(text).toContain("当前模型：anthropic/claude-sonnet-4")
-    expect(text).toContain("聊天默认：/tmp/chat (workspace=ws_chat)")
-    expect(text).toContain("用户默认：/tmp/user (workspace=ws_user)")
+    expect(text).toContain("聊天默认：/tmp/chat (workspace=wrk_chat)")
+    expect(text).toContain("用户默认：/tmp/user (workspace=wrk_user)")
     expect(text).toContain("session: ses_1")
   })
 
@@ -3351,7 +3358,7 @@ describe("commands", () => {
     const conf = cfg()
     await store.save_session(
       session({
-        workspace_id: "ws_status",
+        workspace_id: "wrk_status",
         model: {
           providerID: "openai",
           modelID: "gpt-5.4",
@@ -3389,7 +3396,7 @@ describe("commands", () => {
     expect(ok).toBeTrue()
     expect(ai.ensures).toEqual([])
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
-    expect(text).toContain("目录：/tmp (workspace=ws_status)")
+    expect(text).toContain("目录：/tmp (workspace=wrk_status)")
     expect(text).toContain("当前模型：anthropic/claude-sonnet-4@max")
     expect(text).toContain("默认模型：openai/gpt-5.4")
     expect(text).toContain("session: ses_1")
@@ -3406,20 +3413,20 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "ws_chat" }))
+    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "wrk_chat" }))
     await store.save_pref({
       scope: "chat",
       tenant_id: "tenant",
       chat_id: "chat",
       directory: "/tmp/chat",
-      workspace_id: "ws_chat",
+      workspace_id: "wrk_chat",
     })
     const oc = {
       ...opencode(),
       async sessions(input: { directory?: string; workspace?: string; roots?: boolean; limit?: number }) {
         expect(input).toEqual({
           directory: "/tmp/chat",
-          workspace: "ws_chat",
+          workspace: "wrk_chat",
           roots: true,
           limit: 8,
         })
@@ -3428,7 +3435,7 @@ describe("commands", () => {
             id: "ses_1",
             title: "current",
             directory: "/tmp/chat",
-            workspace_id: "ws_chat",
+            workspace_id: "wrk_chat",
             created_at: 1,
             updated_at: 1,
           },
@@ -3436,7 +3443,7 @@ describe("commands", () => {
             id: "ses_2",
             title: "older",
             directory: "/tmp/chat",
-            workspace_id: "ws_chat",
+            workspace_id: "wrk_chat",
             created_at: 1,
             updated_at: 1,
           },
@@ -3444,7 +3451,7 @@ describe("commands", () => {
             id: "ses_other_ws",
             title: "wrong workspace",
             directory: "/tmp/chat",
-            workspace_id: "ws_other",
+            workspace_id: "wrk_other",
             created_at: 1,
             updated_at: 1,
           },
@@ -3460,7 +3467,7 @@ describe("commands", () => {
       async status(input: { directory?: string; workspace?: string }) {
         expect(input).toEqual({
           directory: "/tmp/chat",
-          workspace: "ws_chat",
+          workspace: "wrk_chat",
         })
         return {
           ses_1: { type: "busy" },
@@ -3476,7 +3483,7 @@ describe("commands", () => {
     expect(text).toContain("最近会话（共 2 条）：")
     expect(text).toContain("[当前] [busy] current")
     expect(text).toContain("session: ses_2")
-    expect(text).toContain("目录: /tmp/chat (workspace=ws_chat)")
+    expect(text).toContain("目录: /tmp/chat (workspace=wrk_chat)")
     expect(text).not.toContain("wrong workspace")
     expect(text).not.toContain("unscoped")
   })
@@ -3485,7 +3492,7 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "ws_chat" }))
+    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "wrk_chat" }))
     await store.save_task(
       row({
         session_id: "ses_2",
@@ -3500,7 +3507,7 @@ describe("commands", () => {
             id: "ses_1",
             title: "current",
             directory: "/tmp/chat",
-            workspace_id: "ws_chat",
+            workspace_id: "wrk_chat",
             created_at: 1,
             updated_at: 1,
           },
@@ -3508,7 +3515,7 @@ describe("commands", () => {
             id: "ses_2",
             title: "background",
             directory: "/tmp/chat",
-            workspace_id: "ws_chat",
+            workspace_id: "wrk_chat",
             created_at: 1,
             updated_at: 1,
           },
@@ -3533,13 +3540,13 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "ws_chat" }))
+    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "wrk_chat" }))
     const oc = {
       ...opencode(),
       async sessions(input: { directory?: string; workspace?: string; roots?: boolean; limit?: number }) {
         expect(input).toEqual({
           directory: "/tmp/chat",
-          workspace: "ws_chat",
+          workspace: "wrk_chat",
           roots: true,
           limit: 8,
         })
@@ -3548,7 +3555,7 @@ describe("commands", () => {
             id: "ses_1",
             title: "current",
             directory: "/tmp/chat",
-            workspace_id: "ws_chat",
+            workspace_id: "wrk_chat",
             created_at: 1,
             updated_at: 1,
           },
@@ -3556,7 +3563,7 @@ describe("commands", () => {
             id: "ses_other_workspace",
             title: "other workspace",
             directory: "/tmp/chat",
-            workspace_id: "ws_other",
+            workspace_id: "wrk_other",
             created_at: 1,
             updated_at: 1,
           },
@@ -3572,7 +3579,7 @@ describe("commands", () => {
       async status(input: { directory?: string; workspace?: string }) {
         expect(input).toEqual({
           directory: "/tmp/chat",
-          workspace: "ws_chat",
+          workspace: "wrk_chat",
         })
         return {
           ses_1: { type: "busy" },
@@ -3597,21 +3604,21 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "ws_chat" }))
+    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "wrk_chat" }))
     const oc = {
       ...opencode(),
       async workspaces(input?: { directory?: string }) {
         expect(input).toEqual({ directory: "/tmp/chat" })
         return [
           {
-            id: "ws_chat",
+            id: "wrk_chat",
             name: "Chat",
             type: "git",
             branch: "main",
             current: true,
           },
           {
-            id: "ws_other",
+            id: "wrk_other",
             name: "Other",
             type: "git",
             branch: "feat/demo",
@@ -3625,15 +3632,15 @@ describe("commands", () => {
     expect(ok).toBeTrue()
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
     expect(text).toContain("当前目录 /tmp/chat 下的 workspace（共 2 项）：")
-    expect(text).toContain("[当前] Chat (ws_chat)")
-    expect(text).toContain("hint: /repo --workspace ws_other")
+    expect(text).toContain("[当前] Chat (wrk_chat)")
+    expect(text).toContain("hint: /repo --workspace wrk_other")
   })
 
   test("/workspaces shows a clear fallback when experimental endpoint is unsupported", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "ws_chat" }))
+    await store.save_session(session({ directory: "/tmp/chat", workspace_id: "wrk_chat" }))
     const oc = {
       ...opencode(),
       async workspaces() {
@@ -3687,7 +3694,7 @@ describe("commands", () => {
             id: "ses_default_ws",
             title: "scoped",
             directory: "/tmp/chat",
-            workspace_id: "ws_default",
+            workspace_id: "wrk_default",
             created_at: 1,
             updated_at: 1,
           },
@@ -3704,7 +3711,7 @@ describe("commands", () => {
 
     const ok = await on_cmd(
       "/sessions",
-      cfg({ workspace: "ws_default" }),
+      cfg({ workspace: "wrk_default" }),
       route(store),
       svc,
       store,
@@ -3722,7 +3729,7 @@ describe("commands", () => {
     const text = ((ui.list[0]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
     expect(text).toContain("最近会话（共 1 条）：")
     expect(text).toContain("目录: /tmp/chat")
-    expect(text).not.toContain("workspace=ws_default")
+    expect(text).not.toContain("workspace=wrk_default")
     expect(text).not.toContain("scoped")
   })
 
@@ -3753,7 +3760,7 @@ describe("commands", () => {
             id: "ses_new",
             title: "New session - 2026-05-06T13:31:05.597Z",
             directory: "/tmp/local-new",
-            workspace_id: "ws_local_new",
+            workspace_id: "wrk_local_new",
             created_at: 3,
             updated_at: 3,
           },
@@ -3761,7 +3768,7 @@ describe("commands", () => {
             id: "ses_other_ws",
             title: "Other workspace",
             directory: "/tmp/local-new",
-            workspace_id: "ws_other",
+            workspace_id: "wrk_other",
             created_at: 4,
             updated_at: 4,
           },
@@ -3776,7 +3783,7 @@ describe("commands", () => {
             id: "ses_other_dir",
             title: "other dir",
             directory: "/tmp/elsewhere",
-            workspace_id: "ws_local_new",
+            workspace_id: "wrk_local_new",
             created_at: 6,
             updated_at: 6,
           },
@@ -3800,7 +3807,7 @@ describe("commands", () => {
       store,
       opencode: oc,
       directory: "/tmp/local-new",
-      workspace: "ws_local_new",
+      workspace: "wrk_local_new",
     })
 
     const created = await on_cmd(
@@ -3862,12 +3869,12 @@ describe("commands", () => {
     expect(text).not.toContain("other dir")
   })
 
-  test("/repo followed by /sessions falls back to the rebound local current session when remote exact scope is empty", async () => {
+  test("/repo bare workspace clear followed by /sessions falls back to the rebound local current session when remote exact scope is empty", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
     const render = createRender()
-    await store.save_session(session({ session_id: "ses_current", directory: "/tmp", workspace_id: undefined }))
+    await store.save_session(session({ session_id: "ses_current", directory: "/tmp", workspace_id: "wrk_other" }))
     const ensure_calls: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
     const session_inputs: Array<{ directory?: string; workspace?: string; roots?: boolean; limit?: number }> = []
     let status_calls = 0
@@ -3885,7 +3892,7 @@ describe("commands", () => {
         status_calls += 1
         expect(input).toEqual({
           directory: "/tmp",
-          workspace: "ws_local",
+          workspace: undefined,
         })
         return {}
       },
@@ -3898,7 +3905,7 @@ describe("commands", () => {
     })
 
     const rebound = await on_cmd(
-      "/repo --workspace ws_local",
+      "/repo --workspace",
       cfg(),
       actual_route,
       svc,
@@ -3910,16 +3917,16 @@ describe("commands", () => {
         id: "in_repo",
         event_id: "evt_repo",
         message_id: "msg_repo",
-        text: "/repo --workspace ws_local",
+        text: "/repo --workspace",
       }),
     )
 
     expect(rebound).toBeTrue()
-    expect(ensure_calls).toEqual([{ directory: "/tmp", workspace: "ws_local" }])
+    expect(ensure_calls).toEqual([{ directory: "/tmp", workspace: undefined }])
     expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
       session_id: "ses_rebound",
       directory: "/tmp",
-      workspace_id: "ws_local",
+      workspace_id: undefined,
     })
 
     const listed = await on_cmd(
@@ -3943,24 +3950,77 @@ describe("commands", () => {
     expect(session_inputs).toEqual([
       {
         directory: "/tmp",
-        workspace: "ws_local",
+        workspace: undefined,
         roots: true,
         limit: 8,
       },
       {
         directory: "",
-        workspace: "ws_local",
+        workspace: undefined,
         roots: true,
         limit: 8,
       },
     ])
     expect(status_calls).toBe(1)
     const text = ((ui.list[1]?.out as { body?: { text?: string } } | undefined)?.body?.text ?? "")
-    expect(text).not.toContain("当前目录 / workspace /tmp (workspace=ws_local) 下暂无会话。")
+    expect(text).not.toContain("当前绑定：/tmp 下暂无会话。")
     expect(text).toContain("最近会话（共 1 条）：")
     expect(text).toContain("[当前] [idle] ses_rebound")
     expect(text).toContain("session: ses_rebound")
-    expect(text).toContain("目录: /tmp (workspace=ws_local)")
+    expect(text).toContain("目录: /tmp")
+    expect(text).not.toContain("workspace=")
+  })
+
+  test("recover treats invalid stored task workspace as unscoped instead of inheriting session workspace", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ workspace_id: "wrk_remote" }))
+    await store.save_inbound(inbound())
+    await store.save_task(row({ status: "running", workspace_id: "ws_bad" }))
+    const status_inputs: Array<{ directory?: string; workspace?: string }> = []
+    const oc = {
+      ...opencode(),
+      async status(input: { directory?: string; workspace?: string }) {
+        status_inputs.push(input)
+        throw new Error("status failed")
+      },
+    } satisfies OpencodeSvc
+
+    await recover(cfg(), store, svc, ui.api, createRender(), oc, "boot")
+
+    expect(status_inputs).toEqual([
+      {
+        directory: "/tmp",
+        workspace: undefined,
+      },
+    ])
+  })
+
+  test("/repo rejects invalid remote workspace selector", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+
+    const ok = await on_cmd(
+      "/repo --workspace ws_bad",
+      cfg(),
+      route(store),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      opencode(),
+      inbound({ text: "/repo --workspace ws_bad" }),
+    )
+
+    expect(ok).toBeTrue()
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: "workspace 无效：ws_bad。显式 workspace 必须使用 wrk*；本地项目请省略 --workspace，若要清空当前绑定请直接使用 /repo --workspace。可先用 /workspaces 查看可用 ID。",
+      },
+    })
   })
 
   test("/new followed by /sessions renders same-directory remote roots regardless of workspace without marking a pending foreground current", async () => {
@@ -3975,7 +4035,7 @@ describe("commands", () => {
         id: "ses_new",
         title: "New session - 2026-05-06T13:31:05.597Z",
         directory: "/tmp/local-new",
-        workspace_id: "ws_local_new",
+        workspace_id: "wrk_local_new",
         created_at: 3,
         updated_at: 3,
       },
@@ -3983,7 +4043,7 @@ describe("commands", () => {
         id: "ses_old_1",
         title: "Greeting",
         directory: "/tmp/local-new",
-        workspace_id: "ws_local_new",
+        workspace_id: "wrk_local_new",
         created_at: 2,
         updated_at: 2,
       },
@@ -3991,7 +4051,7 @@ describe("commands", () => {
         id: "ses_old_2",
         title: "seedream 4.2 sft 飞书文档查找",
         directory: "/tmp/local-new",
-        workspace_id: "ws_local_new",
+        workspace_id: "wrk_local_new",
         created_at: 1,
         updated_at: 1,
       },
@@ -3999,7 +4059,7 @@ describe("commands", () => {
         id: "ses_other_ws",
         title: "Other workspace",
         directory: "/tmp/local-new",
-        workspace_id: "ws_other",
+        workspace_id: "wrk_other",
         created_at: 1,
         updated_at: 1,
       },
@@ -4014,7 +4074,7 @@ describe("commands", () => {
         id: "ses_other_dir",
         title: "other dir",
         directory: "/tmp/other",
-        workspace_id: "ws_local_new",
+        workspace_id: "wrk_local_new",
         created_at: 1,
         updated_at: 1,
       },
@@ -4054,7 +4114,7 @@ describe("commands", () => {
       store,
       opencode: oc,
       directory: "/tmp/local-new",
-      workspace: "ws_local_new",
+      workspace: "wrk_local_new",
     })
 
     const created = await on_cmd(
@@ -4143,7 +4203,7 @@ describe("commands", () => {
               id: "ses_other_dir_first",
               title: "other dir first",
               directory: "/tmp/another",
-              workspace_id: "ws_other",
+              workspace_id: "wrk_other",
               created_at: 2,
               updated_at: 2,
             },
@@ -4160,7 +4220,7 @@ describe("commands", () => {
             id: "ses_other_ws_global",
             title: "wrong workspace elsewhere",
             directory: "/tmp/another",
-            workspace_id: "ws_other",
+            workspace_id: "wrk_other",
             created_at: 3,
             updated_at: 3,
           },
@@ -4189,7 +4249,7 @@ describe("commands", () => {
       store,
       opencode: oc,
       directory: "/tmp/local-new",
-      workspace: "ws_local_new",
+      workspace: "wrk_local_new",
     })
 
     const created = await on_cmd(
@@ -4292,7 +4352,7 @@ describe("commands", () => {
         id: "ses_other_ws",
         title: "wrong workspace",
         directory: "/tmp/history",
-        workspace_id: "ws_other",
+        workspace_id: "wrk_other",
         created_at: 1,
         updated_at: 1,
       },
@@ -4435,7 +4495,7 @@ describe("commands", () => {
               id: "ses_other_dir_first",
               title: "other dir first",
               directory: "/tmp/other",
-              workspace_id: "ws_local_new",
+              workspace_id: "wrk_local_new",
               created_at: 2,
               updated_at: 2,
             },
@@ -4452,7 +4512,7 @@ describe("commands", () => {
             id: "ses_new",
             title: "New session - 2026-05-07T03:37:36.193Z",
             directory: "/tmp/local-new",
-            workspace_id: "ws_local_new",
+            workspace_id: "wrk_local_new",
             created_at: 3,
             updated_at: 3,
           },
@@ -4460,7 +4520,7 @@ describe("commands", () => {
             id: "ses_old_1",
             title: "Greeting",
             directory: "/tmp/local-new",
-            workspace_id: "ws_other",
+            workspace_id: "wrk_other",
             created_at: 2,
             updated_at: 2,
           },
@@ -4468,7 +4528,7 @@ describe("commands", () => {
             id: "ses_other_dir",
             title: "other dir",
             directory: "/tmp/other",
-            workspace_id: "ws_local_new",
+            workspace_id: "wrk_local_new",
             created_at: 1,
             updated_at: 1,
           },
@@ -4491,7 +4551,7 @@ describe("commands", () => {
       store,
       opencode: oc,
       directory: "/tmp/local-new",
-      workspace: "ws_local_new",
+      workspace: "wrk_local_new",
     })
 
     const created = await on_cmd(
@@ -4564,7 +4624,7 @@ describe("commands", () => {
     const ai = opencode()
     const conf = cfg({
       directory: "/tmp/local-new",
-      workspace: "ws_local_new",
+      workspace: "wrk_local_new",
     })
     const render = createRender()
     const route = createSessionSvc({
@@ -4608,11 +4668,11 @@ describe("commands", () => {
       }),
     )
 
-    expect(ai.ensures).toEqual([{ directory: "/tmp/local-new", workspace: "ws_local_new" }])
+    expect(ai.ensures).toEqual([{ directory: "/tmp/local-new", workspace: "wrk_local_new" }])
     expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
       session_id: "ses_1",
       directory: "/tmp/local-new",
-      workspace_id: "ws_local_new",
+      workspace_id: "wrk_local_new",
       state: "active",
     })
   })
@@ -4626,7 +4686,7 @@ describe("commands", () => {
       tenant_id: "tenant",
       chat_id: "chat",
       directory: "/tmp/chat-default",
-      workspace_id: "ws_chat_default",
+      workspace_id: "wrk_chat_default",
     })
     const svc_route = {
       ...route(store),
@@ -4634,7 +4694,7 @@ describe("commands", () => {
         return session({
           session_id: "ses_new",
           directory: "/tmp/chat-default",
-          workspace_id: "ws_chat_default",
+          workspace_id: "wrk_chat_default",
         })
       },
     } satisfies SessionSvc
@@ -4645,7 +4705,7 @@ describe("commands", () => {
     expect(ui.list[0]?.out).toMatchObject({
       kind: "text",
       body: {
-        text: ["已切换到新会话，首次发送消息时创建。", "目录：/tmp/chat-default (workspace=ws_chat_default)"].join("\n"),
+        text: ["已切换到新会话，首次发送消息时创建。", "目录：/tmp/chat-default (workspace=wrk_chat_default)"].join("\n"),
       },
     })
   })
@@ -4680,28 +4740,35 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
+    const oc = {
+      ...opencode(),
+      async workspaces(input?: { directory?: string }) {
+        expect(input).toEqual({ directory: "/tmp/me-next" })
+        return [{ id: "wrk_me_next" }]
+      },
+    } satisfies OpencodeSvc
 
     const ok = await on_cmd(
-      "/repo --me /tmp/me-next --workspace ws_me_next",
+      "/repo --me /tmp/me-next --workspace wrk_me_next",
       cfg(),
       route(store),
       svc,
       store,
       ui.api,
       createRender(),
-      opencode(),
-      inbound({ text: "/repo --me /tmp/me-next --workspace ws_me_next" }),
+      oc,
+      inbound({ text: "/repo --me /tmp/me-next --workspace wrk_me_next" }),
     )
 
     expect(ok).toBeTrue()
     expect(await store.get_pref({ scope: "user", tenant_id: "tenant", user_id: "user" })).toMatchObject({
       directory: "/tmp/me-next",
-      workspace_id: "ws_me_next",
+      workspace_id: "wrk_me_next",
     })
     expect(ui.list[0]?.out).toMatchObject({
       kind: "text",
       body: {
-        text: "已设置当前用户默认绑定：/tmp/me-next (workspace=ws_me_next)",
+        text: "已设置当前用户默认绑定：/tmp/me-next (workspace=wrk_me_next)",
       },
     })
   })
@@ -4716,7 +4783,7 @@ describe("commands", () => {
       tenant_id: "tenant",
       user_id: "user",
       directory: "/tmp/me",
-      workspace_id: "ws_me",
+      workspace_id: "wrk_me",
     })
 
     const ok = await on_cmd(
@@ -4744,14 +4811,13 @@ describe("commands", () => {
     })
   })
 
-  test("/repo --workspace binds current session and switches when scope changes", async () => {
+  test("/repo --me with bare workspace flag clears to unscoped default binding", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session())
 
     const ok = await on_cmd(
-      "/repo --workspace ws_local",
+      "/repo --me /tmp/me-local --workspace",
       cfg(),
       route(store),
       svc,
@@ -4759,24 +4825,110 @@ describe("commands", () => {
       ui.api,
       createRender(),
       opencode(),
-      inbound({ text: "/repo --workspace ws_local" }),
+      inbound({ text: "/repo --me /tmp/me-local --workspace" }),
+    )
+
+    expect(ok).toBeTrue()
+    expect(await store.get_pref({ scope: "user", tenant_id: "tenant", user_id: "user" })).toMatchObject({
+      directory: "/tmp/me-local",
+      workspace_id: undefined,
+    })
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: "已设置当前用户默认绑定：/tmp/me-local",
+      },
+    })
+  })
+
+  test("/repo bare workspace flag binds current session and switches when scope changes", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ workspace_id: "wrk_current" }))
+
+    const ok = await on_cmd(
+      "/repo --workspace",
+      cfg(),
+      route(store),
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      opencode(),
+      inbound({ text: "/repo --workspace" }),
     )
 
     expect(ok).toBeTrue()
     expect(ui.list[0]?.out).toMatchObject({
       kind: "text",
       body: {
-        text: ["已绑定：/tmp (workspace=ws_local)", "已切换到新会话。"].join("\n"),
+        text: ["已绑定：/tmp", "已切换到新会话。"].join("\n"),
       },
     })
   })
 
+  test("/repo --workspace blocks rebinding current session when explicit workspace is missing", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ directory: "/tmp/current", workspace_id: "wrk_current" }))
+    let bind_calls = 0
+    let workspaces_calls = 0
+    const svc_route = {
+      ...route(store),
+      async bind() {
+        bind_calls += 1
+        return session({ session_id: "ses_should_not_bind" })
+      },
+    } satisfies SessionSvc
+    const oc = {
+      ...opencode(),
+      async workspaces(input?: { directory?: string }) {
+        workspaces_calls += 1
+        expect(input).toEqual({ directory: "/tmp/current" })
+        return [
+          {
+            id: "wrk_other",
+            name: "Other",
+          },
+        ]
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd(
+      "/repo --workspace wrk_missing",
+      cfg(),
+      svc_route,
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      inbound({ text: "/repo --workspace wrk_missing" }),
+    )
+
+    expect(ok).toBeTrue()
+    expect(workspaces_calls).toBe(1)
+    expect(bind_calls).toBe(0)
+    expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
+      session_id: "ses_1",
+      directory: "/tmp/current",
+      workspace_id: "wrk_current",
+    })
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: "未找到 workspace：wrk_missing。当前目录 /tmp/current 下没有这个 workspace；可先用 /workspaces 查看可用 ID。本地项目请省略 --workspace，若要清空当前绑定请直接使用 /repo --workspace。",
+      },
+    })
+  })
 
   test("/repo changes directory without workspace, clears stale workspace, and does not auto-create one", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ directory: "/tmp/current", workspace_id: "ws_current" }))
+    await store.save_session(session({ directory: "/tmp/current", workspace_id: "wrk_current" }))
     const ensure_calls: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
     let workspaces_calls = 0
     const oc = {
@@ -4829,7 +4981,7 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ directory: "/tmp/current", workspace_id: "ws_current" }))
+    await store.save_session(session({ directory: "/tmp/current", workspace_id: "wrk_current" }))
     const ensure_calls: Array<{ directory?: string; workspace?: string; session_id?: string }> = []
     const oc = {
       ...opencode(),
@@ -4862,12 +5014,12 @@ describe("commands", () => {
     expect(await store.get_session({ tenant_id: "tenant", chat_id: "chat", thread_id: undefined })).toMatchObject({
       session_id: "ses_1",
       directory: "/tmp/current",
-      workspace_id: "ws_current",
+      workspace_id: "wrk_current",
     })
     expect(ui.list[0]?.out).toMatchObject({
       kind: "text",
       body: {
-        text: "已绑定：/tmp/current (workspace=ws_current)",
+        text: "已绑定：/tmp/current (workspace=wrk_current)",
       },
     })
   })
@@ -4910,7 +5062,7 @@ describe("commands", () => {
     const conf = cfg()
     await store.save_session(
       session({
-        workspace_id: "ws_model",
+        workspace_id: "wrk_model",
         model: {
           providerID: "openai",
           modelID: "gpt-5.4",
@@ -4952,13 +5104,13 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ workspace_id: "ws_model" }))
+    await store.save_session(session({ workspace_id: "wrk_model" }))
     const oc = {
       ...opencode(),
       async providers(input?: { directory?: string; workspace?: string }) {
         expect(input).toEqual({
           directory: "/tmp",
-          workspace: "ws_model",
+          workspace: "wrk_model",
         })
         return [
           {
@@ -5027,13 +5179,13 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ workspace_id: "ws_model" }))
+    await store.save_session(session({ workspace_id: "wrk_model" }))
     const oc = {
       ...opencode(),
       async providers(input?: { directory?: string; workspace?: string }) {
         expect(input).toEqual({
           directory: "/tmp",
-          workspace: "ws_model",
+          workspace: "wrk_model",
         })
         return [
           {
@@ -5096,7 +5248,7 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ directory: "/tmp/scoped", workspace_id: "ws_scoped" }))
+    await store.save_session(session({ directory: "/tmp/scoped", workspace_id: "wrk_scoped" }))
 
     const calls: Array<{ name: string; input?: { directory?: string; workspace?: string } }> = []
     const oc = {
@@ -5145,11 +5297,11 @@ describe("commands", () => {
     }
 
     expect(calls).toEqual([
-      { name: "skills", input: { directory: "/tmp/scoped", workspace: "ws_scoped" } },
-      { name: "agents", input: { directory: "/tmp/scoped", workspace: "ws_scoped" } },
-      { name: "providers", input: { directory: "/tmp/scoped", workspace: "ws_scoped" } },
-      { name: "mcps", input: { directory: "/tmp/scoped", workspace: "ws_scoped" } },
-      { name: "commands", input: { directory: "/tmp/scoped", workspace: "ws_scoped" } },
+      { name: "skills", input: { directory: "/tmp/scoped", workspace: "wrk_scoped" } },
+      { name: "agents", input: { directory: "/tmp/scoped", workspace: "wrk_scoped" } },
+      { name: "providers", input: { directory: "/tmp/scoped", workspace: "wrk_scoped" } },
+      { name: "mcps", input: { directory: "/tmp/scoped", workspace: "wrk_scoped" } },
+      { name: "commands", input: { directory: "/tmp/scoped", workspace: "wrk_scoped" } },
     ])
   })
 
@@ -5157,7 +5309,7 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ workspace_id: "ws_model" }))
+    await store.save_session(session({ workspace_id: "wrk_model" }))
     const models_calls: Array<{ directory?: string; workspace?: string }> = []
     const model_calls: Array<{ session_id: string; model?: { providerID: string; modelID: string; variant?: string }; mode?: "default" | "explicit" }> = []
     const oc = {
@@ -5189,7 +5341,7 @@ describe("commands", () => {
     const ok = await on_cmd("/model openai/gpt-5.4", cfg(), svc_route, svc, store, ui.api, createRender(), oc, inbound({ text: "/model openai/gpt-5.4" }))
 
     expect(ok).toBeTrue()
-    expect(models_calls).toEqual([{ directory: "/tmp", workspace: "ws_model" }])
+    expect(models_calls).toEqual([{ directory: "/tmp", workspace: "wrk_model" }])
     expect(model_calls).toEqual([
       {
         session_id: "ses_1",
@@ -5211,14 +5363,14 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ workspace_id: "ws_model" }))
+    await store.save_session(session({ workspace_id: "wrk_model" }))
     const model_calls: Array<{ session_id: string; model?: { providerID: string; modelID: string; variant?: string }; mode?: "default" | "explicit" }> = []
     const oc = {
       ...opencode(),
       async providers(input?: { directory?: string; workspace?: string }) {
         expect(input).toEqual({
           directory: "/tmp",
-          workspace: "ws_model",
+          workspace: "wrk_model",
         })
         return [
           {
@@ -5269,7 +5421,7 @@ describe("commands", () => {
     const ui = feishu()
     await store.save_session(
       session({
-        workspace_id: "ws_model",
+        workspace_id: "wrk_model",
         model: {
           providerID: "openai",
           modelID: "gpt-5.4",
@@ -5283,7 +5435,7 @@ describe("commands", () => {
       async providers(input?: { directory?: string; workspace?: string }) {
         expect(input).toEqual({
           directory: "/tmp",
-          workspace: "ws_model",
+          workspace: "wrk_model",
         })
         return [
           {
@@ -5331,14 +5483,14 @@ describe("commands", () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
     const ui = feishu()
-    await store.save_session(session({ workspace_id: "ws_model" }))
+    await store.save_session(session({ workspace_id: "wrk_model" }))
     const model_calls: Array<{ session_id: string; model?: { providerID: string; modelID: string; variant?: string }; mode?: "default" | "explicit" }> = []
     const oc = {
       ...opencode(),
       async providers(input?: { directory?: string; workspace?: string }) {
         expect(input).toEqual({
           directory: "/tmp",
-          workspace: "ws_model",
+          workspace: "wrk_model",
         })
         return [
           {

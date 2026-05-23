@@ -54,6 +54,7 @@ import {
   time,
   type RecoverMode,
 } from "./text.js"
+import { normalizeWorkspace as scope_workspace, parseWorkspaceSelection } from "../workspace.js"
 export { explain, friendly, status_text } from "./text.js"
 
 type App = {
@@ -147,7 +148,10 @@ async function prefs(store: Store, inbound: InboundMessage) {
     tenant_id: inbound.tenant_id,
     user_id: inbound.user_id,
   })
-  return { chat, user }
+  return {
+    chat: chat ? { ...chat, workspace_id: scope_workspace(chat.workspace_id) } : chat,
+    user: user ? { ...user, workspace_id: scope_workspace(user.workspace_id) } : user,
+  }
 }
 
 function local() {
@@ -161,14 +165,15 @@ function help() {
     "/repo --chat 为当前聊天设置默认目录",
     "/repo --me 为当前用户设置默认目录",
     "--chat / --me 可与 --workspace 组合使用",
-    "/sessions 会按当前目录列出最近会话；当前会话已创建时会按 workspace 精确过滤",
-    "/skills、/agents、/models、/mcps、/commands 会按当前目录 / workspace 取数",
-    "/workspaces 会列出当前仓库目录下可用 workspace",
-    "未命中的 slash 会按当前目录 / workspace 尝试透传到 OpenCode 执行，例如 /init",
+    "/sessions 会按当前目录列出最近会话；如已选择 workspace，会优先按该 workspace 过滤，必要时补足同目录历史",
+    "/skills、/agents、/models、/mcps、/commands 会按当前目录取数；如已选择 workspace，也会带上该 workspace",
+    "/workspaces 会列出当前目录下可用的 OpenCode workspace",
+    "未命中的 slash 会按当前目录和所选 workspace 尝试透传到 OpenCode 执行，例如 /init",
     "示例：/repo /path/to/opencode",
     "示例：/repo --chat /path/to/opencode",
-    "示例：/repo --workspace ws_local",
-    "示例：/repo /path/to/opencode --workspace ws_local",
+    "示例：/repo --workspace",
+    "示例：/repo /path/to/opencode --workspace wrk_demo",
+    "本地项目可省略 --workspace；如需清空当前绑定，可直接使用 /repo --workspace；远端 workspace 必须使用 wrk* ID。",
     "示例：/sessions",
     "示例：/workspaces",
     "示例：/session ses_xxx",
@@ -641,7 +646,11 @@ function site(
   session?: Pick<ImSession, "directory" | "workspace_id"> | null,
 ) {
   const directory = row?.directory ?? session?.directory ?? conf.opencode.directory
-  const workspace = row ? row.workspace_id : session ? session.workspace_id : conf.opencode.workspace
+  const workspace = row
+    ? scope_workspace(row.workspace_id)
+    : session
+      ? scope_workspace(session.workspace_id)
+      : scope_workspace(conf.opencode.workspace)
   return {
     directory,
     workspace,
@@ -684,7 +693,7 @@ async function dest(store: Store, row: Task | null | undefined, session_id: stri
     return {
       chat_id: hit.chat_id,
       directory: row?.directory ?? hit.directory,
-      workspace: row ? row.workspace_id : hit.workspace_id,
+      workspace: row ? scope_workspace(row.workspace_id) : scope_workspace(hit.workspace_id),
     }
   }
   if (!row) return
@@ -693,7 +702,7 @@ async function dest(store: Store, row: Task | null | undefined, session_id: stri
   return {
     chat_id: inbound.chat_id,
     directory: row.directory,
-    workspace: row.workspace_id,
+    workspace: scope_workspace(row.workspace_id),
   }
 }
 
@@ -1161,7 +1170,46 @@ function state(val?: OpencodeStatus) {
 }
 
 function exact_workspace(current?: string, target?: string) {
-  return current === target
+  return scope_workspace(current) === scope_workspace(target)
+}
+
+function workspace_listing_unsupported(val: string) {
+  return (
+    val.includes("404") ||
+    val.includes("Not Found") ||
+    val.includes("experimental/workspace") ||
+    val.includes("unsupported")
+  )
+}
+
+async function listed_workspaces(opencode: OpencodeSvc, directory?: string) {
+  try {
+    return await opencode.workspaces({
+      directory,
+    })
+  } catch (err) {
+    if (workspace_listing_unsupported(raw(err))) return null
+    throw err
+  }
+}
+
+function workspace_error(val: string) {
+  return `workspace 无效：${val}。显式 workspace 必须使用 wrk*；本地项目请省略 --workspace，若要清空当前绑定请直接使用 /repo --workspace。可先用 /workspaces 查看可用 ID。`
+}
+
+function workspace_missing_error(val: string, dir?: string) {
+  return `未找到 workspace：${val}。当前目录 ${repo(dir)} 下没有这个 workspace；可先用 /workspaces 查看可用 ID。本地项目请省略 --workspace，若要清空当前绑定请直接使用 /repo --workspace。`
+}
+
+function repo_session_directory(
+  current: Awaited<ReturnType<Store["get_session"]>>,
+  pref: Awaited<ReturnType<typeof prefs>>,
+  conf: AppCfg,
+) {
+  if (current) return current.directory
+  if (pref.chat?.directory || pref.chat?.workspace_id) return pref.chat.directory
+  if (pref.user?.directory || pref.user?.workspace_id) return pref.user.directory
+  return conf.opencode.directory
 }
 
 function repo_workspace_binding(input: {
@@ -1171,9 +1219,11 @@ function repo_workspace_binding(input: {
   next_workspace?: string
   workspace_present: boolean
 }) {
-  if (input.workspace_present) return input.next_workspace
+  const current_workspace = scope_workspace(input.current_workspace)
+  const next_workspace = scope_workspace(input.next_workspace)
+  if (input.workspace_present) return next_workspace
   if (input.next_directory !== undefined && input.next_directory !== input.current_directory) return undefined
-  return input.current_workspace
+  return current_workspace
 }
 
 function exact_session_scope(
@@ -1198,7 +1248,9 @@ function scope(
   conf: AppCfg,
 ) {
   const directory = current?.directory ?? pref.chat?.directory ?? pref.user?.directory ?? conf.opencode.directory
-  const workspace = current ? current.workspace_id : pref.chat ? pref.chat.workspace_id : pref.user ? pref.user.workspace_id : conf.opencode.workspace
+  const workspace = scope_workspace(
+    current ? current.workspace_id : pref.chat ? pref.chat.workspace_id : pref.user ? pref.user.workspace_id : conf.opencode.workspace,
+  )
   return {
     directory,
     workspace,
@@ -1215,7 +1267,7 @@ function sessions(
   pending = false,
 ) {
   if (list.length === 0) {
-    return pending ? `当前目录：${dir ?? "未绑定"} 下暂无会话。` : `当前目录 / workspace ${repo(dir, workspace)} 下暂无会话。`
+    return pending ? `当前目录：${dir ?? "未绑定"} 下暂无会话。` : `当前绑定：${repo(dir, workspace)} 下暂无会话。`
   }
   return [
     `最近会话（共 ${list.length} 条）：`,
@@ -1240,14 +1292,15 @@ function workspaces(
   if (list.length === 0) return `当前目录 ${repo(dir)} 下没有可用 workspace。`
   return [
     `当前目录 ${repo(dir)} 下的 workspace（共 ${list.length} 项）：`,
-    ...list.map((item, i) =>
-      [
-        `${i + 1}. ${item.current || item.id === current ? "[当前] " : ""}${item.name && item.name !== item.id ? `${item.name} (${item.id})` : item.id}`,
+    ...list.map((item, i) => {
+      const active = item.current || exact_workspace(item.id, current)
+      return [
+        `${i + 1}. ${active ? "[当前] " : ""}${item.name && item.name !== item.id ? `${item.name} (${item.id})` : item.id}`,
         `type: ${item.type ?? "-"}`,
         `branch: ${item.branch ?? "-"}`,
-        `hint: /repo --workspace ${item.id}`,
-      ].join("\n"),
-    ),
+        active ? undefined : `hint: /repo --workspace ${item.id}`,
+      ].filter(Boolean).join("\n")
+    }),
   ].join("\n\n")
 }
 
@@ -2918,20 +2971,7 @@ export async function on_cmd(
   }
 
   if (cmd.name === "workspaces") {
-    const list = await opencode.workspaces({
-      directory: base.directory,
-    }).catch((err) => {
-      const text = raw(err)
-      if (
-        text.includes("404") ||
-        text.includes("Not Found") ||
-        text.includes("experimental/workspace") ||
-        text.includes("unsupported")
-      ) {
-        return null
-      }
-      throw err
-    })
+    const list = await listed_workspaces(opencode, base.directory)
     await feishu.reply({
       msg_id: inbound.message_id,
       out: {
@@ -3215,6 +3255,39 @@ export async function on_cmd(
   }
 
   if (cmd.name === "repo") {
+    const selected_workspace = cmd.workspace_present
+      ? parseWorkspaceSelection(cmd.workspace)
+      : { ok: true as const, workspace: undefined }
+    if (!selected_workspace.ok) {
+      await feishu.reply({
+        msg_id: inbound.message_id,
+        out: {
+          kind: "text",
+          body: {
+            text: workspace_error(selected_workspace.value),
+          },
+        },
+      })
+      return true
+    }
+
+    const explicit_workspace = cmd.workspace_present ? selected_workspace.workspace : undefined
+    const preflight_workspace = async (directory?: string) => {
+      if (!explicit_workspace) return false
+      const list = await listed_workspaces(opencode, directory)
+      if (!list || list.some((item) => exact_workspace(item.id, explicit_workspace))) return false
+      await feishu.reply({
+        msg_id: inbound.message_id,
+        out: {
+          kind: "text",
+          body: {
+            text: workspace_missing_error(explicit_workspace, directory),
+          },
+        },
+      })
+      return true
+    }
+
     if (cmd.scope === "chat") {
       if (!cmd.arg && !cmd.workspace_present) {
         await feishu.reply({
@@ -3227,11 +3300,12 @@ export async function on_cmd(
         return true
       }
       const directory = cmd.arg ?? pref.chat?.directory
+      if (await preflight_workspace(directory)) return true
       const workspace_id = repo_workspace_binding({
         current_directory: pref.chat?.directory,
         current_workspace: pref.chat?.workspace_id,
         next_directory: cmd.arg,
-        next_workspace: cmd.workspace,
+        next_workspace: selected_workspace.workspace,
         workspace_present: cmd.workspace_present,
       })
       await store.save_pref({
@@ -3265,11 +3339,12 @@ export async function on_cmd(
         return true
       }
       const directory = cmd.arg ?? pref.user?.directory
+      if (await preflight_workspace(directory)) return true
       const workspace_id = repo_workspace_binding({
         current_directory: pref.user?.directory,
         current_workspace: pref.user?.workspace_id,
         next_directory: cmd.arg,
-        next_workspace: cmd.workspace,
+        next_workspace: selected_workspace.workspace,
         workspace_present: cmd.workspace_present,
       })
       await store.save_pref({
@@ -3307,6 +3382,8 @@ export async function on_cmd(
       })
       return true
     }
+    const directory = cmd.arg ?? repo_session_directory(current, pref, conf)
+    if (await preflight_workspace(directory)) return true
     const item =
       current ??
       (await route.resolve({
@@ -3325,7 +3402,7 @@ export async function on_cmd(
       current_directory: item.directory,
       current_workspace: item.workspace_id,
       next_directory: cmd.arg,
-      next_workspace: cmd.workspace,
+      next_workspace: selected_workspace.workspace,
       workspace_present: cmd.workspace_present,
     })
     const next = await route.bind({

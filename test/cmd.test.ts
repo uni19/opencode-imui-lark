@@ -3,11 +3,11 @@ import { parseCmd } from "../src/gateway/cmd.ts"
 
 describe("parseCmd", () => {
   test("parses repo scope and workspace", () => {
-    expect(parseCmd("/repo --chat /tmp/demo --workspace ws_local")).toEqual({
+    expect(parseCmd("/repo --chat /tmp/demo --workspace wrk_demo")).toEqual({
       name: "repo",
       scope: "chat",
       arg: "/tmp/demo",
-      workspace: "ws_local",
+      workspace: "wrk_demo",
       workspace_present: true,
     })
   })
@@ -43,12 +43,12 @@ describe("parseCmd", () => {
     })
   })
 
-  test("parses repo workspace without directory", () => {
-    expect(parseCmd("/repo --workspace ws_local")).toEqual({
+  test("parses bare repo workspace flag as explicit clear", () => {
+    expect(parseCmd("/repo --workspace")).toEqual({
       name: "repo",
       scope: "session",
       arg: undefined,
-      workspace: "ws_local",
+      workspace: undefined,
       workspace_present: true,
     })
   })
@@ -76,11 +76,11 @@ describe("parseCmd", () => {
   })
 
   test("parses user repo scope with workspace", () => {
-    expect(parseCmd("/repo --me /tmp/me --workspace ws_me")).toEqual({
+    expect(parseCmd("/repo --me /tmp/me --workspace wrk_me")).toEqual({
       name: "repo",
       scope: "user",
       arg: "/tmp/me",
-      workspace: "ws_me",
+      workspace: "wrk_me",
       workspace_present: true,
     })
   })

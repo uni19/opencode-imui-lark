@@ -244,7 +244,7 @@ describe("probe", () => {
     } satisfies OpencodeSvc
 
     const state = await probe(
-      cfg({ workspace: "ws_default" }),
+      cfg({ workspace: "wrk_default" }),
       store,
       svc,
       ui.api,
@@ -270,13 +270,13 @@ describe("probe", () => {
     const render = createRender()
     const ses = {
       ...session("ses_workspace_root"),
-      workspace_id: "ws_chat",
+      workspace_id: "wrk_chat",
     } satisfies ImSession
     await store.save_session(ses)
     await store.save_inbound(inbound("in_workspace_root"))
     await store.save_task({
       ...row("tsk_workspace_root", ses.session_id, "in_workspace_root", "running"),
-      workspace_id: "ws_chat",
+      workspace_id: "wrk_chat",
     })
     const calls: Array<{ name: string; input: { session_id?: string; directory?: string; workspace?: string } }> = []
     const oc = {
@@ -306,7 +306,7 @@ describe("probe", () => {
             id: ses.session_id,
             title: "current",
             directory: "/tmp",
-            workspace_id: "ws_chat",
+            workspace_id: "wrk_chat",
             created_at: 1,
             updated_at: 1,
           },
@@ -314,7 +314,7 @@ describe("probe", () => {
             id: "ses_other_workspace_child",
             title: "other workspace child",
             directory: "/tmp",
-            workspace_id: "ws_other",
+            workspace_id: "wrk_other",
             parent_id: ses.session_id,
             created_at: 1,
             updated_at: 1,
@@ -339,7 +339,7 @@ describe("probe", () => {
     } satisfies OpencodeSvc
 
     const state = await probe(
-      cfg({ workspace: "ws_default" }),
+      cfg({ workspace: "wrk_default" }),
       store,
       svc,
       ui.api,
@@ -351,10 +351,10 @@ describe("probe", () => {
 
     expect(state).toBe("settled")
     expect(calls).toEqual([
-      { name: "status", input: { directory: "/tmp", workspace: "ws_chat" } },
-      { name: "result", input: { session_id: "ses_workspace_root", directory: "/tmp", workspace: "ws_chat" } },
-      { name: "status", input: { directory: "/tmp", workspace: "ws_chat" } },
-      { name: "sessions", input: { directory: "/tmp", workspace: "ws_chat" } },
+      { name: "status", input: { directory: "/tmp", workspace: "wrk_chat" } },
+      { name: "result", input: { session_id: "ses_workspace_root", directory: "/tmp", workspace: "wrk_chat" } },
+      { name: "status", input: { directory: "/tmp", workspace: "wrk_chat" } },
+      { name: "sessions", input: { directory: "/tmp", workspace: "wrk_chat" } },
     ])
     expect((await store.get_task("tsk_workspace_root"))).toMatchObject({
       status: "completed",
