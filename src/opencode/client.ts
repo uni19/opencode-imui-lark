@@ -14,6 +14,7 @@ import type {
   OpencodeWorkspace,
   PromptPart,
 } from "../contracts.js"
+import { normalizeWorkspace as scope_workspace, parseWorkspaceSelection } from "../workspace.js"
 
 type Json = Record<string, unknown>
 type ScopeInput = { directory?: string; workspace?: string }
@@ -48,10 +49,10 @@ function has<K extends string>(input: object, key: K): input is Record<K, unknow
 function qs(input: ScopeInput) {
   const url = new URLSearchParams()
   const directory = dir(input.directory)
+  const selected = parseWorkspaceSelection(input.workspace)
+  const workspace = selected.ok ? selected.workspace : undefined
   if (directory) url.set("directory", directory)
-  if (has(input, "workspace") && typeof input.workspace === "string") {
-    url.set("workspace", input.workspace)
-  }
+  if (has(input, "workspace") && workspace) url.set("workspace", workspace)
   const val = url.toString()
   if (!val) return ""
   return "?" + val
@@ -73,7 +74,7 @@ function session(item: Record<string, unknown>): OpencodeSession {
     id: String(item.id ?? ""),
     title: String(item.title ?? item.id ?? ""),
     directory: String(item.directory ?? ""),
-    workspace_id: typeof item.workspaceID === "string" ? item.workspaceID : undefined,
+    workspace_id: scope_workspace(typeof item.workspaceID === "string" ? item.workspaceID : undefined),
     parent_id: typeof item.parentID === "string" ? item.parentID : undefined,
     ...(model_ref(item.model) ? { model: model_ref(item.model) } : {}),
     created_at:
@@ -84,6 +85,13 @@ function session(item: Record<string, unknown>): OpencodeSession {
 }
 
 function workspace(item: Record<string, unknown>): OpencodeWorkspace {
+  const id = scope_workspace(
+    typeof item.id === "string"
+      ? item.id
+      : typeof item.workspaceID === "string"
+        ? item.workspaceID
+        : undefined,
+  )
   const branch = typeof item.branch === "string"
     ? item.branch
     : typeof item.gitBranch === "string"
@@ -107,7 +115,7 @@ function workspace(item: Record<string, unknown>): OpencodeWorkspace {
         ? item.active
         : undefined
   return {
-    id: String(item.id ?? item.workspaceID ?? ""),
+    id: id ?? "",
     name,
     type,
     branch,
@@ -298,14 +306,14 @@ export function createOpencodeSvc(cfg: AppCfg): OpencodeSvc {
     async sessions(input) {
       const query = new URLSearchParams()
       const directory = dir(input.directory ?? cfg.opencode.directory)
+      const workspace = scope_workspace(input.workspace)
       if (directory) query.set("directory", directory)
-      if (has(input, "workspace") && typeof input.workspace === "string") {
-        query.set("workspace", input.workspace)
-      }
+      if (has(input, "workspace") && workspace) query.set("workspace", workspace)
       if (input.limit) query.set("limit", String(input.limit))
       if (input.roots) query.set("roots", "true")
       const suffix = query.toString() ? "?" + query.toString() : ""
-      const data = await req(cfg, "GET", "/session" + suffix)
+      const path = workspace ? "/api/session" : "/session"
+      const data = await req(cfg, "GET", path + suffix)
       if (!Array.isArray(data)) return []
       return data
         .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")

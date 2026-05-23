@@ -505,7 +505,7 @@ describe("opencode client", () => {
     const svc = createOpencodeSvc(
       cfg({
         directory: "/tmp/default-scope",
-        workspace: "ws_default",
+        workspace: "wrk_default",
       }),
     )
 
@@ -525,11 +525,11 @@ describe("opencode client", () => {
         }
       }),
     ).toEqual([
-      { path: "/command", directory: "/tmp/default-scope", workspace: "ws_default" },
-      { path: "/skill", directory: "/tmp/default-scope", workspace: "ws_default" },
-      { path: "/agent", directory: "/tmp/default-scope", workspace: "ws_default" },
-      { path: "/provider", directory: "/tmp/default-scope", workspace: "ws_default" },
-      { path: "/mcp", directory: "/tmp/default-scope", workspace: "ws_default" },
+      { path: "/command", directory: "/tmp/default-scope", workspace: "wrk_default" },
+      { path: "/skill", directory: "/tmp/default-scope", workspace: "wrk_default" },
+      { path: "/agent", directory: "/tmp/default-scope", workspace: "wrk_default" },
+      { path: "/provider", directory: "/tmp/default-scope", workspace: "wrk_default" },
+      { path: "/mcp", directory: "/tmp/default-scope", workspace: "wrk_default" },
     ])
   })
 
@@ -538,13 +538,13 @@ describe("opencode client", () => {
     const svc = createOpencodeSvc(
       cfg({
         directory: "/tmp/default-scope",
-        workspace: "ws_default",
+        workspace: "wrk_default",
       }),
     )
 
     const input = {
       directory: "/tmp/override-scope",
-      workspace: "ws_override",
+      workspace: "wrk_override",
     }
 
     await svc.commands(input)
@@ -563,11 +563,11 @@ describe("opencode client", () => {
         }
       }),
     ).toEqual([
-      { path: "/command", directory: "/tmp/override-scope", workspace: "ws_override" },
-      { path: "/skill", directory: "/tmp/override-scope", workspace: "ws_override" },
-      { path: "/agent", directory: "/tmp/override-scope", workspace: "ws_override" },
-      { path: "/provider", directory: "/tmp/override-scope", workspace: "ws_override" },
-      { path: "/mcp", directory: "/tmp/override-scope", workspace: "ws_override" },
+      { path: "/command", directory: "/tmp/override-scope", workspace: "wrk_override" },
+      { path: "/skill", directory: "/tmp/override-scope", workspace: "wrk_override" },
+      { path: "/agent", directory: "/tmp/override-scope", workspace: "wrk_override" },
+      { path: "/provider", directory: "/tmp/override-scope", workspace: "wrk_override" },
+      { path: "/mcp", directory: "/tmp/override-scope", workspace: "wrk_override" },
     ])
   })
 
@@ -593,7 +593,7 @@ describe("opencode client", () => {
     expect(
       await svc.ensure({
         directory: "/tmp/project",
-        workspace: "ws_local",
+        workspace: "wrk_demo",
         model: {
           providerID: "openai",
           modelID: "gpt-5.4",
@@ -601,7 +601,7 @@ describe("opencode client", () => {
         },
       }),
     ).toEqual({ id: "ses_new" })
-    expect(capture.url).toContain('/session?directory=%2Ftmp%2Fproject&workspace=ws_local')
+    expect(capture.url).toContain('/session?directory=%2Ftmp%2Fproject&workspace=wrk_demo')
     expect(capture.body).toEqual({
       model: {
         id: "gpt-5.4",
@@ -609,6 +609,34 @@ describe("opencode client", () => {
         variant: "fast",
       },
     })
+  })
+
+  test("ensure omits workspace query when caller selects local project with blank workspace", async () => {
+    const urls = capture_fetch({ id: "ses_local" })
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "wrk_default",
+      }),
+    )
+
+    await svc.ensure({
+      directory: "/tmp/local-project",
+      workspace: "",
+    })
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+        }
+      }),
+    ).toEqual([
+      { path: "/session", directory: "/tmp/local-project", workspace: null },
+    ])
   })
 
   test("command forwards top-level variant and provider/model string", async () => {
@@ -655,7 +683,7 @@ describe("opencode client", () => {
       id: "ses_1",
       title: "Session 1",
       directory: "/tmp/project",
-      workspaceID: "ws_local",
+      workspaceID: "wrk_demo",
       model: {
         providerID: "openai",
         id: "gpt-5.4",
@@ -672,12 +700,35 @@ describe("opencode client", () => {
       id: "ses_1",
       title: "Session 1",
       directory: "/tmp/project",
-      workspace_id: "ws_local",
+      workspace_id: "wrk_demo",
       model: {
         providerID: "openai",
         modelID: "gpt-5.4",
         variant: "fast",
       },
+      created_at: 1,
+      updated_at: 2,
+    })
+  })
+
+  test("session normalizes invalid workspace payload to unscoped", async () => {
+    mock_fetch({
+      id: "ses_local",
+      title: "Local session",
+      directory: "/tmp/project",
+      workspaceID: "ws_bad",
+      time: {
+        created: 1,
+        updated: 2,
+      },
+    })
+
+    const svc = createOpencodeSvc(cfg())
+    expect(await svc.session("ses_local")).toEqual({
+      id: "ses_local",
+      title: "Local session",
+      directory: "/tmp/project",
+      workspace_id: undefined,
       created_at: 1,
       updated_at: 2,
     })
@@ -792,7 +843,7 @@ describe("opencode client", () => {
     const svc = createOpencodeSvc(
       cfg({
         directory: "/tmp/default-scope",
-        workspace: "ws_default",
+        workspace: "wrk_default",
       }),
     )
 
@@ -821,24 +872,170 @@ describe("opencode client", () => {
     ])
   })
 
+  test("runtime endpoints omit workspace query when caller explicitly passes empty string", async () => {
+    const urls = capture_fetch([])
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "wrk_default",
+      }),
+    )
+
+    await svc.status({
+      directory: "/tmp/runtime-scope",
+      workspace: "",
+    })
+    await svc.last({
+      session_id: "ses_1",
+      directory: "/tmp/runtime-scope",
+      workspace: "",
+    })
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+        }
+      }),
+    ).toEqual([
+      { path: "/session/status", directory: "/tmp/runtime-scope", workspace: null },
+      { path: "/session/ses_1/message", directory: "/tmp/runtime-scope", workspace: null },
+    ])
+  })
+
+  test("runtime endpoints omit workspace query when caller passes blank workspace", async () => {
+    const urls = capture_fetch([])
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "wrk_default",
+      }),
+    )
+
+    await svc.status({
+      directory: "/tmp/runtime-scope",
+      workspace: "",
+    })
+    await svc.last({
+      session_id: "ses_1",
+      directory: "/tmp/runtime-scope",
+      workspace: "",
+    })
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+        }
+      }),
+    ).toEqual([
+      { path: "/session/status", directory: "/tmp/runtime-scope", workspace: null },
+      { path: "/session/ses_1/message", directory: "/tmp/runtime-scope", workspace: null },
+    ])
+  })
+
+  test("seeded endpoints omit blank configured workspace", async () => {
+    const urls = capture_fetch([])
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "   ",
+      }),
+    )
+
+    await svc.commands()
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+        }
+      }),
+    ).toEqual([
+      { path: "/command", directory: "/tmp/default-scope", workspace: null },
+    ])
+  })
+
+  test("seeded endpoints omit invalid configured workspace", async () => {
+    const urls = capture_fetch([])
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "ws_bad",
+      }),
+    )
+
+    await svc.commands()
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+        }
+      }),
+    ).toEqual([
+      { path: "/command", directory: "/tmp/default-scope", workspace: null },
+    ])
+  })
+
+  test("ensure omits workspace query when blank override should suppress config workspace", async () => {
+    const urls = capture_fetch({ id: "ses_1" })
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "wrk_default",
+      }),
+    )
+
+    await svc.ensure({
+      directory: "/tmp/runtime-scope",
+      workspace: "",
+    })
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+        }
+      }),
+    ).toEqual([
+      { path: "/session", directory: "/tmp/runtime-scope", workspace: null },
+    ])
+  })
+
   test("sessions keeps config directory for undefined and omits directory when caller passes empty string", async () => {
     const urls = capture_fetch([])
     const svc = createOpencodeSvc(
       cfg({
         directory: "/tmp/default-scope",
-        workspace: "ws_default",
+        workspace: "wrk_default",
       }),
     )
 
     await svc.sessions({
       directory: undefined,
-      workspace: "ws_local",
+      workspace: "wrk_demo",
       roots: true,
       limit: 8,
     })
     await svc.sessions({
       directory: "",
-      workspace: "ws_local",
+      workspace: "wrk_demo",
       roots: true,
       limit: 8,
     })
@@ -856,16 +1053,16 @@ describe("opencode client", () => {
       }),
     ).toEqual([
       {
-        path: "/session",
+        path: "/api/session",
         directory: "/tmp/default-scope",
-        workspace: "ws_local",
+        workspace: "wrk_demo",
         roots: "true",
         limit: "8",
       },
       {
-        path: "/session",
+        path: "/api/session",
         directory: null,
-        workspace: "ws_local",
+        workspace: "wrk_demo",
         roots: "true",
         limit: "8",
       },
@@ -877,13 +1074,13 @@ describe("opencode client", () => {
     const svc = createOpencodeSvc(
       cfg({
         directory: "/tmp/default-scope",
-        workspace: "ws_default",
+        workspace: "wrk_default",
       }),
     )
 
     await svc.sessions({
       directory: "/tmp/scoped",
-      workspace: "ws_local",
+      workspace: "wrk_demo",
       roots: true,
       limit: 8,
     })
@@ -906,9 +1103,9 @@ describe("opencode client", () => {
       }),
     ).toEqual([
       {
-        path: "/session",
+        path: "/api/session",
         directory: "/tmp/scoped",
-        workspace: "ws_local",
+        workspace: "wrk_demo",
         roots: "true",
         limit: "8",
       },
@@ -922,7 +1119,82 @@ describe("opencode client", () => {
     ])
   })
 
-  test("workspaces uses experimental endpoint and normalizes fields", async () => {
+  test("sessions omits workspace query when caller selects local project with blank workspace", async () => {
+    const urls = capture_fetch([])
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "wrk_default",
+      }),
+    )
+
+    await svc.sessions({
+      directory: "/tmp/local-project",
+      workspace: "",
+      roots: true,
+      limit: 8,
+    })
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+          roots: url.searchParams.get("roots"),
+          limit: url.searchParams.get("limit"),
+        }
+      }),
+    ).toEqual([
+      {
+        path: "/session",
+        directory: "/tmp/local-project",
+        workspace: null,
+        roots: "true",
+        limit: "8",
+      },
+    ])
+  })
+
+  test("sessions omits blank workspace query when caller passes empty string", async () => {
+    const urls = capture_fetch([])
+    const svc = createOpencodeSvc(
+      cfg({
+        directory: "/tmp/default-scope",
+        workspace: "wrk_default",
+      }),
+    )
+
+    await svc.sessions({
+      directory: "/tmp/unscoped-empty",
+      workspace: "",
+      limit: 3,
+    })
+
+    expect(
+      urls.map((item) => {
+        const url = new URL(item)
+        return {
+          path: url.pathname,
+          directory: url.searchParams.get("directory"),
+          workspace: url.searchParams.get("workspace"),
+          roots: url.searchParams.get("roots"),
+          limit: url.searchParams.get("limit"),
+        }
+      }),
+    ).toEqual([
+      {
+        path: "/session",
+        directory: "/tmp/unscoped-empty",
+        workspace: null,
+        roots: null,
+        limit: "3",
+      },
+    ])
+  })
+
+  test("workspaces uses experimental endpoint and filters invalid ids", async () => {
     const urls: string[] = []
     globalThis.fetch = Object.assign(
       async (input: RequestInfo | URL) => {
@@ -930,14 +1202,14 @@ describe("opencode client", () => {
         urls.push(url.toString())
         return new Response(JSON.stringify([
           {
-            id: "ws_local",
+            id: "ws_bad",
             name: "Local",
             type: "git",
             branch: "main",
             current: true,
           },
           {
-            workspaceID: "ws_feature",
+            workspaceID: "wrk_feature",
             label: "Feature",
             kind: "git",
             gitBranch: "feat/demo",
@@ -963,14 +1235,7 @@ describe("opencode client", () => {
       }),
     ).toEqual([
       {
-        id: "ws_local",
-        name: "Local",
-        type: "git",
-        branch: "main",
-        current: true,
-      },
-      {
-        id: "ws_feature",
+        id: "wrk_feature",
         name: "Feature",
         type: "git",
         branch: "feat/demo",
