@@ -1,5 +1,6 @@
 import crypto from "node:crypto"
 import type { Task, TaskSvc, Store, TaskTerminalKind } from "../contracts.js"
+import { normalizeWorkspace } from "../workspace.js"
 
 const now = () => Date.now()
 const terminal = new Set<Task["status"]>(["completed", "failed", "aborted"])
@@ -21,7 +22,7 @@ export function createTaskSvc(store: Store): TaskSvc {
         inbound_id: input.inbound_id,
         reply_anchor_message_id: input.reply_anchor_message_id,
         directory: input.directory,
-        workspace_id: input.workspace_id,
+        workspace_id: normalizeWorkspace(input.workspace_id),
         status: "queued",
         created_at: time,
         updated_at: time,
@@ -37,7 +38,7 @@ export function createTaskSvc(store: Store): TaskSvc {
         inbound_id: input.inbound_id,
         reply_anchor_message_id: input.reply_anchor_message_id,
         directory: input.directory,
-        workspace_id: input.workspace_id,
+        workspace_id: normalizeWorkspace(input.workspace_id),
         result_hash: input.clear_result_hash ? undefined : task.result_hash,
         superseded_by_task_id: undefined,
         updated_at: now(),

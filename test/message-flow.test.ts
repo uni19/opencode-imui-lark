@@ -330,7 +330,7 @@ describe("message flow", () => {
     const rebound = await route.bind({
       session_id: current.session_id,
       directory: "/tmp/alt",
-      workspace_id: "ws_alt",
+      workspace_id: "wrk_alt",
     })
     if (!rebound) throw new Error("missing rebound session")
 
@@ -351,7 +351,7 @@ describe("message flow", () => {
     expect(ai.prompts[0]).toMatchObject({
       session_id: rebound.session_id,
       directory: "/tmp/alt",
-      workspace: "ws_alt",
+      workspace: "wrk_alt",
     })
     expect(ai.prompts[0]).not.toHaveProperty("model")
     expect(ai.prompts[0]).not.toHaveProperty("agent")
@@ -378,7 +378,7 @@ describe("message flow", () => {
     })
     const scoped = await route.bind({
       session_id: current.session_id,
-      workspace_id: "ws_alt",
+      workspace_id: "wrk_alt",
     })
     if (!scoped) throw new Error("missing scoped session")
 
@@ -417,7 +417,7 @@ describe("message flow", () => {
     })
     const scoped = await route.bind({
       session_id: current.session_id,
-      workspace_id: "ws_alt",
+      workspace_id: "wrk_alt",
     })
     if (!scoped) throw new Error("missing scoped session")
 
@@ -430,7 +430,7 @@ describe("message flow", () => {
     expect(rebound).toMatchObject({
       session_id: scoped.session_id,
       directory: "/tmp",
-      workspace_id: "ws_alt",
+      workspace_id: "wrk_alt",
     })
   })
 
@@ -467,7 +467,7 @@ describe("message flow", () => {
     const rebound = await route.bind({
       session_id: updated.session_id,
       directory: "/tmp/alt",
-      workspace_id: "ws_alt",
+      workspace_id: "wrk_alt",
     })
     if (!rebound) throw new Error("missing rebound session")
 
@@ -488,7 +488,7 @@ describe("message flow", () => {
     expect(ai.prompts[0]).toMatchObject({
       session_id: rebound.session_id,
       directory: "/tmp/alt",
-      workspace: "ws_alt",
+      workspace: "wrk_alt",
       model: {
         providerID: "anthropic",
         modelID: "claude-sonnet-4",
@@ -531,7 +531,7 @@ describe("message flow", () => {
     const rebound = await route.bind({
       session_id: updated.session_id,
       directory: "/tmp/alt",
-      workspace_id: "ws_alt",
+      workspace_id: "wrk_alt",
     })
     if (!rebound) throw new Error("missing rebound session")
 
@@ -552,7 +552,7 @@ describe("message flow", () => {
     expect(ai.prompts[0]).toMatchObject({
       session_id: rebound.session_id,
       directory: "/tmp/alt",
-      workspace: "ws_alt",
+      workspace: "wrk_alt",
       model: {
         providerID: "openai",
         modelID: "gpt-5.4",
@@ -594,7 +594,7 @@ describe("message flow", () => {
     const rebound = await route.bind({
       session_id: reset.session_id,
       directory: "/tmp/alt",
-      workspace_id: "ws_alt",
+      workspace_id: "wrk_alt",
     })
     if (!rebound) throw new Error("missing rebound session")
 
@@ -657,7 +657,7 @@ describe("message flow", () => {
     const rebound = await route.bind({
       session_id: reset.session_id,
       directory: "/tmp/alt",
-      workspace_id: "ws_alt",
+      workspace_id: "wrk_alt",
     })
     if (!rebound) throw new Error("missing rebound session")
 
@@ -769,7 +769,7 @@ describe("message flow", () => {
         id: "ses_remote",
         title: "Remote",
         directory: "/tmp/remote",
-        workspace_id: "ws_remote",
+        workspace_id: "wrk_remote",
         model: {
           providerID: "openai",
           modelID: "gpt-5.4",
@@ -783,7 +783,7 @@ describe("message flow", () => {
     expect(switched).toMatchObject({
       session_id: "ses_remote",
       directory: "/tmp/remote",
-      workspace_id: "ws_remote",
+      workspace_id: "wrk_remote",
       model: {
         providerID: "openai",
         modelID: "gpt-5.4",
@@ -808,7 +808,7 @@ describe("message flow", () => {
     expect(ai.prompts[0]).toMatchObject({
       session_id: "ses_remote",
       directory: "/tmp/remote",
-      workspace: "ws_remote",
+      workspace: "wrk_remote",
       model: {
         providerID: "openai",
         modelID: "gpt-5.4",
@@ -836,7 +836,7 @@ describe("message flow", () => {
       user_id: "user_other",
       session_id: "ses_remote",
       directory: "/tmp/known",
-      workspace_id: "ws_known",
+      workspace_id: "wrk_known",
       model: {
         providerID: "openai",
         modelID: "gpt-5.4",
@@ -867,7 +867,7 @@ describe("message flow", () => {
         id: "ses_remote",
         title: "Remote",
         directory: "/tmp/remote",
-        workspace_id: "ws_remote",
+        workspace_id: "wrk_remote",
         model: {
           providerID: "openai",
           modelID: "gpt-5.4",
@@ -881,7 +881,7 @@ describe("message flow", () => {
     expect(switched).toMatchObject({
       session_id: "ses_remote",
       directory: "/tmp/remote",
-      workspace_id: "ws_remote",
+      workspace_id: "wrk_remote",
       model: {
         providerID: "openai",
         modelID: "gpt-5.4",
@@ -925,7 +925,7 @@ describe("message flow", () => {
         id: "ses_remote",
         title: "Remote",
         directory: "/tmp/remote",
-        workspace_id: "ws_remote",
+        workspace_id: "wrk_remote",
         model: {
           providerID: "openai",
           modelID: "gpt-5.4",
@@ -959,7 +959,7 @@ describe("message flow", () => {
         id: "ses_other",
         title: "Other",
         directory: "/tmp/other",
-        workspace_id: "ws_other",
+        workspace_id: "wrk_other",
         model: {
           providerID: "anthropic",
           modelID: "claude-sonnet-4",
@@ -981,7 +981,7 @@ describe("message flow", () => {
         id: "ses_remote",
         title: "Remote",
         directory: "/tmp/remote",
-        workspace_id: "ws_remote",
+        workspace_id: "wrk_remote",
         model: {
           providerID: "openai",
           modelID: "gpt-5.4",
@@ -995,7 +995,7 @@ describe("message flow", () => {
     expect(switchedBack).toMatchObject({
       session_id: "ses_remote",
       directory: "/tmp/remote",
-      workspace_id: "ws_remote",
+      workspace_id: "wrk_remote",
       model: {
         providerID: "openai",
         modelID: "gpt-5.4",
@@ -1019,7 +1019,7 @@ describe("message flow", () => {
     expect(ai.prompts[0]).toMatchObject({
       session_id: "ses_remote",
       directory: "/tmp/remote",
-      workspace: "ws_remote",
+      workspace: "wrk_remote",
       model: {
         providerID: "openai",
         modelID: "gpt-5.4",
@@ -1051,7 +1051,7 @@ describe("message flow", () => {
       user_id: "user",
       session_id: "ses_1",
       directory: "/tmp",
-      workspace_id: "ws_pref",
+      workspace_id: "wrk_pref",
       model: conf.opencode.model,
       state: "active",
       created_at: 1,
@@ -1084,7 +1084,7 @@ describe("message flow", () => {
     expect(ai.prompts[0]).toMatchObject({
       session_id: "ses_1",
       directory: "/tmp",
-      workspace: "ws_pref",
+      workspace: "wrk_pref",
       model: {
         providerID: "anthropic",
         modelID: "claude-sonnet-4",

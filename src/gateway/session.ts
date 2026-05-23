@@ -1,5 +1,6 @@
 import crypto from "node:crypto"
 import type { ChatType, ImSession, OpencodeSvc, SessionModelPref, SessionSvc, Store } from "../contracts.js"
+import { normalizeWorkspace } from "../workspace.js"
 
 type Input = {
   store: Store
@@ -30,19 +31,19 @@ async function pref(input: Input, val: { tenant_id: string; chat_id: string; use
     tenant_id: val.tenant_id,
     chat_id: val.chat_id,
   })
-  if (chat?.directory || chat?.workspace_id) return chat
+  if (chat?.directory || chat?.workspace_id) return { ...chat, workspace_id: normalizeWorkspace(chat.workspace_id) }
   const user = await input.store.get_pref({
     scope: "user",
     tenant_id: val.tenant_id,
     user_id: val.user_id,
   })
-  if (user?.directory || user?.workspace_id) return user
+  if (user?.directory || user?.workspace_id) return { ...user, workspace_id: normalizeWorkspace(user.workspace_id) }
   return {
     scope: "user" as const,
     tenant_id: val.tenant_id,
     user_id: val.user_id,
     directory: input.directory,
-    workspace_id: input.workspace,
+    workspace_id: normalizeWorkspace(input.workspace),
   }
 }
 
@@ -71,7 +72,7 @@ function create(
     user_id,
     session_id,
     directory,
-    workspace_id,
+    workspace_id: normalizeWorkspace(workspace_id),
     model,
     state,
     created_at: time,
@@ -82,12 +83,13 @@ function create(
 async function materialize_pending(input: Input, row: ImSession): Promise<ImSession> {
   const result = await input.opencode.ensure({
     directory: row.directory,
-    workspace: row.workspace_id,
+    workspace: normalizeWorkspace(row.workspace_id),
     model: row.model,
   })
   const next = {
     ...row,
     session_id: result.id,
+    workspace_id: normalizeWorkspace(row.workspace_id),
     state: "active" as const,
     updated_at: now(),
   }
@@ -102,13 +104,19 @@ function pref_model(pref: SessionModelPref | null, fallback: ImSession["model"])
 }
 
 async function rehydrate_active_session(input: Input, row: ImSession): Promise<ImSession> {
+  const workspace_id = normalizeWorkspace(row.workspace_id)
+  const base = workspace_id === row.workspace_id ? row : { ...row, workspace_id }
   const pref = await input.store.get_session_model_pref(row.session_id)
-  if (!pref) return row
+  if (!pref) {
+    if (base === row) return row
+    await input.store.save_session(base)
+    return base
+  }
   const next = {
-    ...row,
+    ...base,
     model: pref_model(pref, input.model),
   }
-  if (next.model === row.model) return row
+  if (next.model === row.model && next.workspace_id === row.workspace_id) return row
   await input.store.save_session(next)
   return next
 }
@@ -187,6 +195,7 @@ export function createSessionSvc(input: Input): SessionSvc {
       })
       const known = await input.store.get_session_by_opencode(val.session.id)
       const pref = await input.store.get_session_model_pref(val.session.id)
+      const workspace_id = normalizeWorkspace(val.session.workspace_id)
       const model = pref
         ? pref_model(pref, input.model)
         : known?.model ?? val.session.model ?? input.model
@@ -198,7 +207,7 @@ export function createSessionSvc(input: Input): SessionSvc {
             user_id: val.user_id,
             session_id: val.session.id,
             directory: val.session.directory,
-            workspace_id: val.session.workspace_id,
+            workspace_id,
             model,
             state: "active" as const,
             updated_at: now(),
@@ -212,7 +221,7 @@ export function createSessionSvc(input: Input): SessionSvc {
             val.user_id,
             val.session.id,
             val.session.directory,
-            val.session.workspace_id,
+            workspace_id,
             model,
           )
       await input.store.save_session(next)
@@ -223,8 +232,9 @@ export function createSessionSvc(input: Input): SessionSvc {
       const items = await input.store.get_session_by_opencode(val.session_id)
       if (!items) return null
       const directory = val.directory ?? items.directory
-      const workspace_id = has(val, "workspace_id") ? val.workspace_id : items.workspace_id
-      const reset = directory !== items.directory || workspace_id !== items.workspace_id
+      const current_workspace = normalizeWorkspace(items.workspace_id)
+      const workspace_id = has(val, "workspace_id") ? normalizeWorkspace(val.workspace_id) : current_workspace
+      const reset = directory !== items.directory || workspace_id !== current_workspace
       const session = !is_pending_session(items) && reset
         ? await input.opencode.ensure({
             directory,
@@ -273,6 +283,7 @@ export function createSessionSvc(input: Input): SessionSvc {
       )
       const next = {
         ...item,
+        workspace_id: normalizeWorkspace(item.workspace_id),
         model: next_model,
         updated_at: now(),
       }

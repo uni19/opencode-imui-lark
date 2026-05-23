@@ -365,6 +365,58 @@ describe("on_card_action", () => {
     })
   })
 
+  test("approval callback treats invalid stored task workspace as unscoped instead of inheriting session workspace", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ workspace_id: "wrk_remote" }))
+    await store.save_inbound(inbound())
+    await store.save_task(
+      row({
+        status: "waiting_permission",
+        req_type: "permission",
+        req: "req_invalid_scope",
+        req_id: "req_invalid_scope",
+        outbound_id: "out_invalid_scope",
+        workspace_id: "ws_bad",
+        note: `approval:${encodeURIComponent("external_directory")}:${encodeURIComponent(JSON.stringify({ filepath: "/tmp" }))}`,
+      }),
+    )
+    const calls: Array<{ req: string; reply: "once" | "always" | "reject"; workspace?: string }> = []
+    const oc = {
+      ...opencode({
+        status: {
+          ses_1: { type: "busy" },
+        },
+      }),
+      async allow(input) {
+        calls.push({ req: input.req, reply: input.reply, workspace: input.workspace })
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_card_action(
+      svc,
+      store,
+      ui.api,
+      createRender(),
+      oc,
+      approvalCardAction({
+        req: "req_invalid_scope",
+        message_id: "out_invalid_scope",
+        reply: "once",
+      }),
+    )
+
+    expect(ok).toBeTrue()
+    expect(calls).toEqual([
+      {
+        req: "req_invalid_scope",
+        reply: "once",
+        workspace: undefined,
+      },
+    ])
+  })
+
   test("stale card callback does not mutate background or replaced wait", async () => {
     const store = createMemoryStore()
     const svc = createTaskSvc(store)
