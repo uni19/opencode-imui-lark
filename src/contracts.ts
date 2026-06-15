@@ -78,6 +78,7 @@ export type ImSession = {
   session_id: string
   directory?: string
   workspace_id?: string
+  agent?: string
   model?: OpencodeModel
   state: ImSessionState
   created_at: number
@@ -407,6 +408,7 @@ export type SessionSvc = {
     session: OpencodeSession
   }): Promise<ImSession>
   bind(input: { session_id: string; directory?: string; workspace_id?: string }): Promise<ImSession | null>
+  agent(input: { session_id: string; agent?: string; mode?: "default" | "explicit" }): Promise<ImSession | null>
   model(input: { session_id: string; model?: OpencodeModel; mode?: SessionModelPref["mode"] }): Promise<ImSession | null>
 }
 

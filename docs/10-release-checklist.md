@@ -140,6 +140,9 @@ bun run release:smoke
 - [ ] `/repo --chat <directory>`
 - [ ] `/repo --me <directory>`
 - [ ] `/repo --workspace <workspace>`（远端用 `wrk*` ID；本地项目省略 `--workspace`；如需清空当前绑定，直接使用 `/repo --workspace`）
+- [ ] `/agent`（无参数）会返回当前 agent、默认 agent，并提示可用 `/agents` 查看列表
+- [ ] `/agent <agent_name>`
+- [ ] `/agent reset`
 - [ ] `/model`（无参数）会返回当前模型、默认模型，并明确提示：当 provider 暴露 variants 时，可在 `/models` 查看这些 variants；切换时使用 `/model <provider>/<model_id>@<variant>`，清除当前 variant 则直接使用 `/model <provider>/<model_id>`
 - [ ] `/model <provider>/<model_id>` / `/model <provider>/<model_id>@<variant>`
 - [ ] `/model reset`

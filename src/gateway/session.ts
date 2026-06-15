@@ -57,6 +57,7 @@ function create(
   session_id: string,
   directory?: string,
   workspace_id?: string,
+  agent?: string,
   model?: ImSession["model"],
   state: ImSession["state"] = "active",
 ): ImSession {
@@ -73,6 +74,7 @@ function create(
     session_id,
     directory,
     workspace_id: normalizeWorkspace(workspace_id),
+    agent,
     model,
     state,
     created_at: time,
@@ -162,6 +164,7 @@ export function createSessionSvc(input: Input): SessionSvc {
         result.id,
         bind.directory,
         bind.workspace_id,
+        undefined,
         input.model,
       )
       await input.store.save_session(next)
@@ -180,6 +183,7 @@ export function createSessionSvc(input: Input): SessionSvc {
         pending_session_id(),
         bind.directory,
         bind.workspace_id,
+        undefined,
         input.model,
         "pending_new",
       )
@@ -199,6 +203,7 @@ export function createSessionSvc(input: Input): SessionSvc {
       const model = pref
         ? pref_model(pref, input.model)
         : known?.model ?? val.session.model ?? input.model
+      const agent = known?.agent
       const next = current
         ? {
             ...current,
@@ -208,6 +213,7 @@ export function createSessionSvc(input: Input): SessionSvc {
             session_id: val.session.id,
             directory: val.session.directory,
             workspace_id,
+            agent,
             model,
             state: "active" as const,
             updated_at: now(),
@@ -222,6 +228,7 @@ export function createSessionSvc(input: Input): SessionSvc {
             val.session.id,
             val.session.directory,
             workspace_id,
+            agent,
             model,
           )
       await input.store.save_session(next)
@@ -254,6 +261,21 @@ export function createSessionSvc(input: Input): SessionSvc {
         const pref = await input.store.get_session_model_pref(items.session_id)
         if (pref) await input.store.save_session_model_pref(next.session_id, pref)
       }
+      return next
+    },
+
+    async agent(val) {
+      const item = await input.store.get_session_by_opencode(val.session_id)
+      if (!item) return null
+      const mode = val.mode ?? (val.agent ? "explicit" : "default")
+      if (mode === "explicit" && !val.agent) return null
+      const next = {
+        ...item,
+        workspace_id: normalizeWorkspace(item.workspace_id),
+        agent: mode === "default" ? undefined : val.agent,
+        updated_at: now(),
+      }
+      await input.store.save_session(next)
       return next
     },
 

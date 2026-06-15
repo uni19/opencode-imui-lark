@@ -43,6 +43,21 @@ describe("parseCmd", () => {
     })
   })
 
+  test("parses agent selection and reset", () => {
+    expect(parseCmd("/agent build")).toEqual({
+      name: "agent",
+      arg: "build",
+    })
+    expect(parseCmd("/agent reset")).toEqual({
+      name: "agent",
+      arg: "reset",
+    })
+    expect(parseCmd("/agent")).toEqual({
+      name: "agent",
+      arg: undefined,
+    })
+  })
+
   test("parses bare repo workspace flag as explicit clear", () => {
     expect(parseCmd("/repo --workspace")).toEqual({
       name: "repo",

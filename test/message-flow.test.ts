@@ -357,6 +357,55 @@ describe("message flow", () => {
     expect(ai.prompts[0]).not.toHaveProperty("agent")
   })
 
+  test("normal prompt forwards explicit session agent override", async () => {
+    const store = createMemoryStore()
+    const task = createTaskSvc(store)
+    const ui = feishu()
+    const ai = opencode()
+    const conf = cfg()
+    const render = createRender()
+    const route = createSessionSvc({
+      store,
+      opencode: ai.svc,
+      directory: conf.opencode.directory,
+      workspace: conf.opencode.workspace,
+    })
+
+    const current = await route.resolve({
+      tenant_id: "tenant",
+      chat_id: "chat",
+      chat_type: undefined,
+      thread_id: undefined,
+      root_message_id: undefined,
+      user_id: "user",
+    })
+    await route.agent({
+      session_id: current.session_id,
+      agent: "build",
+    })
+
+    await on_msg(
+      conf,
+      route,
+      task,
+      store,
+      ui.api,
+      render,
+      ai.svc,
+      inbound("in_agent_prompt", {
+        text: "用 build 处理",
+      }),
+    )
+
+    expect(ai.prompts).toHaveLength(1)
+    expect(ai.prompts[0]).toMatchObject({
+      session_id: current.session_id,
+      directory: "/tmp",
+      agent: "build",
+    })
+    expect(ai.prompts[0]).not.toHaveProperty("model")
+  })
+
   test("repo rebind clears stale workspace when directory changes and workspace is omitted", async () => {
     const store = createMemoryStore()
     const ai = opencode()

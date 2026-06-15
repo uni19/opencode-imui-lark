@@ -212,8 +212,11 @@ opencode-feishu-imui-service uninstall
 - `/repo`
 - `/sessions`
 - `/workspaces`
+- `/agent`
 - `/model`
 - `/models`
+
+`/agent` 无参数时会说明当前 agent 和默认 agent；切换时使用 `/agent <agent_name>`，恢复默认使用 `/agent reset`。
 
 `/models` 在 provider 信息暴露 variants 时，会在对应 model 后显示 `[variants: ...]`；只有本次展示结果里存在 variants 时，末尾才会出现切换说明。
 

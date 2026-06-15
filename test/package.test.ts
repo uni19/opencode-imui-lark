@@ -64,6 +64,8 @@ describe("release package", () => {
     expect(readme).toContain("OPENCODE_DIRECTORY=/absolute/path/to/your/working-directory")
     expect(readme).toContain("OPENCODE_WORKSPACE=wrk_xxx")
     expect(readme).not.toContain("OPENCODE_DIRECTORY=/absolute/path/to/your/worktree")
+    expect(readme).toContain("- `/agent`")
+    expect(readme).toContain("`/agent` 无参数时会说明当前 agent 和默认 agent；切换时使用 `/agent <agent_name>`，恢复默认使用 `/agent reset`。")
     expect(readme).toContain("- `/models`")
     expect(readme).toContain("`/models` 在 provider 信息暴露 variants 时，会在对应 model 后显示 `[variants: ...]`；只有本次展示结果里存在 variants 时，末尾才会出现切换说明。")
     expect(readme).toContain("`/model` 无参数时会说明：当 provider 暴露 variants 时，可在 `/models` 查看这些 variants；切换时使用 `/model <provider>/<model_id>@<variant>`，清除当前 variant 则直接使用 `/model <provider>/<model_id>`。")

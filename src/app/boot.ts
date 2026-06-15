@@ -41,6 +41,7 @@ import { parseCmd } from "../gateway/cmd.js"
 import { LOCAL_COMMANDS } from "./commands.js"
 import {
   ameta,
+  agent,
   done_msg,
   explain,
   model,
@@ -178,6 +179,8 @@ function help() {
     "示例：/workspaces",
     "示例：/session ses_xxx",
     "示例：/agents",
+    "示例：/agent build",
+    "示例：/agent reset",
     "示例：/models",
     "示例：/model provider/model@variant",
     "示例：/model reset",
@@ -1319,6 +1322,8 @@ function agents(list: OpencodeAgent[]) {
     ...list.map((item, i) =>
       `${i + 1}. ${item.name} [${item.mode}]${item.model ? ` ${item.model.provider_id}/${item.model.model_id}${item.model.variant ? `@${item.model.variant}` : ""}` : ""}${item.description ? ` - ${item.description}` : ""}`,
     ),
+    "",
+    "切换：/agent <agent_name>；重置：/agent reset。",
   ].join("\n")
 }
 
@@ -3000,6 +3005,100 @@ export async function on_cmd(
     return true
   }
 
+  if (cmd.name === "agent") {
+    if (!cmd.arg) {
+      await feishu.reply({
+        msg_id: inbound.message_id,
+        out: {
+          kind: "text",
+          body: {
+            text: [
+              `当前 agent：${agent(current?.agent ?? conf.opencode.agent)}`,
+              `默认 agent：${agent(conf.opencode.agent)}`,
+              `session: ${session_label(current)}`,
+              "可用 /agents 查看当前目录 / workspace 下的 agent。",
+              "切换：/agent <agent_name>；重置：/agent reset。",
+            ].join("\n"),
+          },
+        },
+      })
+      return true
+    }
+
+    if (last && live(last.status)) {
+      await feishu.reply({
+        msg_id: inbound.message_id,
+        out: {
+          kind: "text",
+          body: {
+            text:
+              syncd === "unknown" && active(last.status)
+                ? "暂时无法确认当前执行状态，请稍候再试，或先发送 /abort 终止。"
+                : "当前有执行中的任务，暂时不能切换 agent。",
+          },
+        },
+      })
+      return true
+    }
+
+    const item =
+      current ??
+      (await route.resolve({
+        tenant_id: inbound.tenant_id,
+        chat_id: inbound.chat_id,
+        chat_type: inbound.chat_type,
+        thread_id: inbound.thread_id,
+        root_message_id: inbound.root_message_id,
+        user_id: inbound.user_id,
+      }))
+
+    if (cmd.arg === "reset") {
+      await route.agent({
+        session_id: item.session_id,
+        mode: "default",
+      })
+      await feishu.reply({
+        msg_id: inbound.message_id,
+        out: {
+          kind: "text",
+          body: {
+            text: [`已恢复默认 agent。`, `当前 agent：${agent(conf.opencode.agent)}`, `session: ${session_label(item)}`].join("\n"),
+          },
+        },
+      })
+      return true
+    }
+
+    const target = cmd.arg.trim()
+    const list = await opencode.agents(base)
+    const hit = list.find((item) => item.name === target)
+    if (!hit) {
+      await feishu.reply({
+        msg_id: inbound.message_id,
+        out: {
+          kind: "text",
+          body: { text: `当前没有可用 agent：${target}` },
+        },
+      })
+      return true
+    }
+
+    await route.agent({
+      session_id: item.session_id,
+      agent: hit.name,
+    })
+    await feishu.reply({
+      msg_id: inbound.message_id,
+      out: {
+        kind: "text",
+        body: {
+          text: [`已切换当前 agent。`, `当前 agent：${agent(hit.name)}`, `session: ${session_label(item)}`].join("\n"),
+        },
+      },
+    })
+    return true
+  }
+
   if (cmd.name === "models") {
     const list = await opencode.providers(base)
     await feishu.reply({
@@ -4026,6 +4125,7 @@ export async function on_msg(
         parts: parts(val, list),
         directory: item.directory,
         workspace: item.workspace_id,
+        ...(item.agent ? { agent: item.agent } : {}),
         ...(item.model ? { model: item.model } : {}),
       })
       .then(async () => {
@@ -4155,6 +4255,7 @@ export async function on_msg(
         text: val,
         directory: item.directory,
         workspace: item.workspace_id,
+        ...(item.agent ? { agent: item.agent } : {}),
         ...(item.model ? { model: item.model } : {}),
       })
     } catch (err) {
@@ -4293,6 +4394,7 @@ export async function on_msg(
       parts: parts(val, list),
       directory: item.directory,
       workspace: item.workspace_id,
+      ...(item.agent ? { agent: item.agent } : {}),
       ...(item.model ? { model: item.model } : {}),
     })
     .catch(async (err) => {

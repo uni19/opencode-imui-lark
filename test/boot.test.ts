@@ -245,6 +245,12 @@ function route(store: ReturnType<typeof createMemoryStore>) {
         workspace_id: input.workspace_id,
       })
     },
+    async agent(input) {
+      return session({
+        session_id: input.session_id,
+        agent: input.mode === "default" ? undefined : input.agent,
+      })
+    },
     async model(input) {
       return session({
         session_id: input.session_id,
@@ -5346,6 +5352,134 @@ describe("commands", () => {
       { name: "mcps", input: { directory: "/tmp/scoped", workspace: "wrk_scoped" } },
       { name: "commands", input: { directory: "/tmp/scoped", workspace: "wrk_scoped" } },
     ])
+  })
+
+  test("/agent shows current and default agent", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ agent: "researcher" }))
+
+    const ok = await on_cmd("/agent", cfg({ agent: "build" }), route(store), svc, store, ui.api, createRender(), opencode(), inbound({ text: "/agent" }))
+
+    expect(ok).toBeTrue()
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: [
+          "当前 agent：researcher",
+          "默认 agent：build",
+          "session: ses_1",
+          "可用 /agents 查看当前目录 / workspace 下的 agent。",
+          "切换：/agent <agent_name>；重置：/agent reset。",
+        ].join("\n"),
+      },
+    })
+  })
+
+  test("/agent selects a visible agent for the current session", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ workspace_id: "wrk_agent" }))
+    const agent_calls: Array<{ session_id: string; agent?: string; mode?: "default" | "explicit" }> = []
+    const agents_calls: Array<{ directory?: string; workspace?: string }> = []
+    const oc = {
+      ...opencode(),
+      async agents(input?: { directory?: string; workspace?: string }) {
+        agents_calls.push(input ?? {})
+        return [
+          {
+            name: "build",
+            mode: "primary" as const,
+            description: "Default builder",
+          },
+        ]
+      },
+    } satisfies OpencodeSvc
+    const svc_route = {
+      ...route(store),
+      async agent(input) {
+        agent_calls.push(input)
+        return session({
+          session_id: input.session_id,
+          agent: input.mode === "default" ? undefined : input.agent,
+        })
+      },
+    } satisfies SessionSvc
+
+    const ok = await on_cmd("/agent build", cfg(), svc_route, svc, store, ui.api, createRender(), oc, inbound({ text: "/agent build" }))
+
+    expect(ok).toBeTrue()
+    expect(agents_calls).toEqual([{ directory: "/tmp", workspace: "wrk_agent" }])
+    expect(agent_calls).toEqual([
+      {
+        session_id: "ses_1",
+        agent: "build",
+      },
+    ])
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: ["已切换当前 agent。", "当前 agent：build", "session: ses_1"].join("\n"),
+      },
+    })
+  })
+
+  test("/agent reset clears the explicit session agent", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    await store.save_session(session({ agent: "researcher" }))
+    const agent_calls: Array<{ session_id: string; agent?: string; mode?: "default" | "explicit" }> = []
+    const svc_route = {
+      ...route(store),
+      async agent(input) {
+        agent_calls.push(input)
+        return session({
+          session_id: input.session_id,
+          agent: input.mode === "default" ? undefined : input.agent,
+        })
+      },
+    } satisfies SessionSvc
+
+    const ok = await on_cmd("/agent reset", cfg({ agent: "build" }), svc_route, svc, store, ui.api, createRender(), opencode(), inbound({ text: "/agent reset" }))
+
+    expect(ok).toBeTrue()
+    expect(agent_calls).toEqual([
+      {
+        session_id: "ses_1",
+        mode: "default",
+      },
+    ])
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: ["已恢复默认 agent。", "当前 agent：build", "session: ses_1"].join("\n"),
+      },
+    })
+  })
+
+  test("/agent rejects unavailable target", async () => {
+    const store = createMemoryStore()
+    const svc = createTaskSvc(store)
+    const ui = feishu()
+    const oc = {
+      ...opencode(),
+      async agents() {
+        return [{ name: "build", mode: "primary" as const }]
+      },
+    } satisfies OpencodeSvc
+
+    const ok = await on_cmd("/agent researcher", cfg(), route(store), svc, store, ui.api, createRender(), oc, inbound({ text: "/agent researcher" }))
+
+    expect(ok).toBeTrue()
+    expect(ui.list[0]?.out).toMatchObject({
+      kind: "text",
+      body: {
+        text: "当前没有可用 agent：researcher",
+      },
+    })
   })
 
   test("/model provider/model switches current model", async () => {

@@ -11,7 +11,7 @@ type Prefs = {
 
 type StatusInput = {
   row?: Task | null
-  current?: Pick<ImSession, "session_id" | "directory" | "workspace_id" | "model" | "state"> | null
+  current?: Pick<ImSession, "session_id" | "directory" | "workspace_id" | "agent" | "model" | "state"> | null
   pref: Prefs
   conf: AppCfg
   syncd?: "busy" | "resumable" | "settled" | "unknown"
@@ -60,6 +60,11 @@ export function repo(dir?: string, workspace?: string) {
 export function model(val?: OpencodeModel) {
   if (!val) return "未设置"
   return val.variant ? `${val.providerID}/${val.modelID}@${val.variant}` : `${val.providerID}/${val.modelID}`
+}
+
+export function agent(val?: string) {
+  const name = val?.trim()
+  return name || "未设置"
 }
 
 export function qmeta(note?: string) {
@@ -205,6 +210,8 @@ function status_lines(input: StatusInput) {
   return [
     `会话状态：${label(summary(input.row))}`,
     `目录：${repo(input.current?.directory, input.current?.workspace_id)}`,
+    `当前 agent：${agent(input.current?.agent ?? input.conf.opencode.agent)}`,
+    `默认 agent：${agent(input.conf.opencode.agent)}`,
     `当前模型：${model(input.current?.model ?? input.conf.opencode.model)}`,
     `默认模型：${model(input.conf.opencode.model)}`,
     `聊天默认：${repo(input.pref.chat?.directory, input.pref.chat?.workspace_id)}`,

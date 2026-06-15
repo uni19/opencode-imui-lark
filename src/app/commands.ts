@@ -7,6 +7,7 @@ export const LOCAL_COMMANDS = [
   { name: "/repo", description: "查看或绑定目录 / workspace" },
   { name: "/sessions", description: "查看当前目录下最近会话（已创建会话按 workspace 精确过滤）" },
   { name: "/workspaces", description: "查看当前目录下可用 workspace" },
+  { name: "/agent", description: "查看或切换当前 agent" },
   { name: "/model", description: "查看或切换当前模型" },
   { name: "/skills", description: "查看当前目录 / workspace 下可用技能" },
   { name: "/commands", description: "查看当前目录 / workspace 下可转发 slash 命令" },

@@ -9,6 +9,7 @@ type Cmd =
   | { name: "skills" }
   | { name: "commands" }
   | { name: "agents" }
+  | { name: "agent"; arg?: string }
   | { name: "model"; arg?: string }
   | { name: "models" }
   | { name: "mcps" }
@@ -67,6 +68,7 @@ export function parseCmd(text: string): Cmd | null {
   if (head === "/skills") return { name: "skills" }
   if (head === "/commands") return { name: "commands" }
   if (head === "/agents") return { name: "agents" }
+  if (head === "/agent") return { name: "agent", arg: tail.join(" ") || undefined }
   if (head === "/model") return { name: "model", arg: tail.join(" ") || undefined }
   if (head === "/models") return { name: "models" }
   if (head === "/mcps") return { name: "mcps" }

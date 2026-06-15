@@ -434,6 +434,9 @@ bun run typecheck
 - `/repo --chat`
 - `/repo --me`
 - `/repo --workspace`
+- `/agent`
+- `/agent <agent_name>`
+- `/agent reset`
 - `/model`
 - `/model <provider>/<model>`
 - `/model reset`
